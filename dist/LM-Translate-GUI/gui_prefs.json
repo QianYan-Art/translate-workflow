@@ -1,4 +1,28 @@
 {
   "theme": "minty",
-  "last_dir": ""
+  "last_dir": "",
+  "defaults": {
+    "base_url": "http://localhost:1235/v1",
+    "api_key": "lm-studio",
+    "model": "huihui-hunyuan-mt-chimera-7b-abliterated-i1",
+    "source_lang": "auto",
+    "target_lang": "zh",
+    "chunk_size": 3000,
+    "overlap_chars": 120,
+    "context_only_overlap": true,
+    "start_chunk": 1,
+    "request_timeout": 90,
+    "max_retries": 3,
+    "skip_on_error": true,
+    "use_stream": true,
+    "auto_bisect": true,
+    "bisect_min_chars": 600,
+    "bisect_max_depth": 3,
+    "temperature": "0.3",
+    "top_p": "0.9",
+    "top_k": "",
+    "repetition_penalty": "1.1",
+    "length_penalty": "",
+    "system_prompt": "你是一个专业的翻译助手。请准确、流畅地翻译以下文本，保持原文的语气和风格。对于专业术语，请使用标准的翻译。"
+  }
 }
