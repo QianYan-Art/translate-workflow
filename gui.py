@@ -95,6 +95,11 @@ except SystemExit:
 except Exception:
     pass
 
+# Update DEFAULTS with values from gui_prefs.json if available
+prefs_defaults = PREFS.get("defaults", {})
+if prefs_defaults:
+    DEFAULTS.update(prefs_defaults)
+
 class ProcessRunner:
     def __init__(self, text_widget: tk.Text, progressbar: ttk.Progressbar, status_var: tk.StringVar):
         self.text = text_widget
@@ -472,11 +477,11 @@ class App(tk.Tk):
         self.var_resume = tk.BooleanVar(value=True)
 
         # New: LLM system prompt & hyperparameters (empty means use defaults)
-        self.var_temperature = tk.StringVar(value="")
-        self.var_top_p = tk.StringVar(value="")
-        self.var_top_k = tk.StringVar(value="")
-        self.var_repetition_penalty = tk.StringVar(value="")
-        self.var_length_penalty = tk.StringVar(value="")
+        self.var_temperature = tk.StringVar(value=DEFAULTS.get("temperature", ""))
+        self.var_top_p = tk.StringVar(value=DEFAULTS.get("top_p", ""))
+        self.var_top_k = tk.StringVar(value=DEFAULTS.get("top_k", ""))
+        self.var_repetition_penalty = tk.StringVar(value=DEFAULTS.get("repetition_penalty", ""))
+        self.var_length_penalty = tk.StringVar(value=DEFAULTS.get("length_penalty", ""))
 
         # Grid: 3 columns labels/entries/buttons
         row = 0
@@ -583,6 +588,11 @@ class App(tk.Tk):
         ttk.Label(lf, text="系统提示词（可选）").grid(row=0, column=0, sticky="ne", padx=4, pady=4)
         self.txt_sys_prompt = tk.Text(lf, height=5, wrap="word")
         self.txt_sys_prompt.grid(row=0, column=1, columnspan=3, sticky="we", padx=4, pady=4)
+        
+        # Set default system prompt if available
+        default_system_prompt = DEFAULTS.get("system_prompt", "")
+        if default_system_prompt:
+            self.txt_sys_prompt.insert("1.0", default_system_prompt)
         
         # 添加系统提示词框的鼠标悬停效果
         self._setup_text_hover_effects(self.txt_sys_prompt)
