@@ -12,6 +12,7 @@ import contextlib
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import json
 
 # Use executable directory when packaged (PyInstaller), else file directory
 if getattr(sys, 'frozen', False):
@@ -20,6 +21,27 @@ else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_PY = (SCRIPT_DIR / ".venv" / "Scripts" / "python.exe")
 PYTHON_EXE = str(DEFAULT_PY if DEFAULT_PY.exists() else sys.executable)
+
+# Preferences: remember last used directory
+PREFS_FILE = SCRIPT_DIR / "gui_prefs.json"
+
+def _load_prefs() -> dict:
+    try:
+        if PREFS_FILE.exists():
+            with open(PREFS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+def _save_prefs(d: dict) -> None:
+    try:
+        with open(PREFS_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+PREFS = _load_prefs()
 
 # Best-effort: try to read sane defaults; avoid hard import failures
 DEFAULTS = {
@@ -284,6 +306,75 @@ class InProcessRunner:
         # Cooperative stop is not supported without modifying translator; inform user
         messagebox.showinfo("提示", "打包模式下暂不支持强制停止，请等待当前分块完成或关闭程序。")
 
+# -------- New: Scrollable container for small screens --------
+class ScrollableFrame(ttk.Frame):
+    """A vertically scrollable frame using a Canvas + inner frame.
+    Put content into self.content.
+    """
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.inner = ttk.Frame(self.canvas)
+        self.inner_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.vbar.grid(row=0, column=1, sticky="ns")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # Resize scrollregion when inner changes size
+        def _on_configure(event=None):
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            # Keep inner width equal to canvas width
+            try:
+                self.canvas.itemconfigure(self.inner_id, width=self.canvas.winfo_width())
+            except Exception:
+                pass
+        self.inner.bind("<Configure>", _on_configure)
+        self.canvas.bind("<Configure>", _on_configure)
+
+        # Mousewheel support (bind on enter, unbind on leave)
+        def _on_mousewheel(event):
+            try:
+                # Linux: Button-4 (up) / Button-5 (down)
+                if getattr(event, 'num', None) == 4:
+                    self.canvas.yview_scroll(-1, "units")
+                    return
+                if getattr(event, 'num', None) == 5:
+                    self.canvas.yview_scroll(1, "units")
+                    return
+                # Windows / macOS: <MouseWheel> with delta
+                delta = int(getattr(event, 'delta', 0))
+                if delta == 0:
+                    return
+                step = -1 if delta > 0 else 1  # Windows: +120 上滚，-120 下滚
+                self.canvas.yview_scroll(step, "units")
+            except Exception:
+                pass
+        def _bind_wheel(_=None):
+            try:
+                self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+                self.canvas.bind_all("<Button-4>", _on_mousewheel)
+                self.canvas.bind_all("<Button-5>", _on_mousewheel)
+            except Exception:
+                pass
+        def _unbind_wheel(_=None):
+            try:
+                self.canvas.unbind_all("<MouseWheel>")
+                self.canvas.unbind_all("<Button-4>")
+                self.canvas.unbind_all("<Button-5>")
+            except Exception:
+                pass
+        self.canvas.bind("<Enter>", _bind_wheel)
+        self.canvas.bind("<Leave>", _unbind_wheel)
+        self.inner.bind("<Enter>", _bind_wheel)
+        self.inner.bind("<Leave>", _unbind_wheel)
+
+    @property
+    def content(self):
+        return self.inner
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -291,6 +382,32 @@ class App(tk.Tk):
         self.geometry("980x680")
         self.minsize(900, 600)
 
+        # 优化主题与基础样式：在 Windows 用 vista，其它平台退回 clam；统一一些控件的 padding
+        try:
+            try:
+                import ttkbootstrap as tb
+                # 正确的初始化方式：使用关键字参数指定主题，避免把 self 误当作 theme 传入
+                # 可选主题：cosmo(蓝白简洁), litera(文档风), lumen(亮白), flatly(扁平), united(橙红), 
+                # darkly(深色), cyborg(科技感), superhero(深蓝), solar(暖色), vapor(紫色), minty(薄荷绿)
+                THEME_NAME = "minty"  # 你可以改为: litera, lumen, flatly, united, darkly, cyborg 等
+                style = tb.Style(theme=THEME_NAME)
+            except Exception:
+                style = ttk.Style()
+                try:
+                    style.theme_use("vista")
+                except tk.TclError:
+                    try:
+                        style.theme_use("clam")
+                    except tk.TclError:
+                        pass
+            style.configure("TNotebook.Tab", padding=(10, 4))
+            style.configure("TButton", padding=(8, 4))
+            style.configure("TCheckbutton", padding=(2, 2))
+            style.configure("TLabelframe", padding=(8, 6))
+            style.configure("TLabelframe.Label", padding=(4, 0))
+        except Exception:
+            pass
+        # 创建 Notebook（标签页容器）
         self.notebook = ttk.Notebook(self)
         self.tab_translate = ttk.Frame(self.notebook)
         self.tab_inspect = ttk.Frame(self.notebook)
@@ -298,11 +415,38 @@ class App(tk.Tk):
         self.notebook.add(self.tab_inspect, text="检查分块")
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
+        # last used directory in memory
+        self._last_dir = PREFS.get("last_dir") or str(SCRIPT_DIR)
+
         self._build_translate_tab()
         self._build_inspect_tab()
 
+    def _get_initial_dir(self) -> str:
+        d = self._last_dir or PREFS.get("last_dir") or str(SCRIPT_DIR)
+        try:
+            return str(Path(d))
+        except Exception:
+            return str(SCRIPT_DIR)
+
+    def _remember_path(self, selected_path: str) -> None:
+        try:
+            if not selected_path:
+                return
+            p = Path(selected_path)
+            d = p.parent if p.suffix else (p if p.is_dir() else p.parent)
+            if not d:
+                return
+            self._last_dir = str(d)
+            PREFS["last_dir"] = self._last_dir
+            _save_prefs(PREFS)
+        except Exception:
+            pass
+
     def _build_translate_tab(self):
-        frm = self.tab_translate
+        # Use scrollable container to improve small-screen usability
+        sc = ScrollableFrame(self.tab_translate)
+        sc.pack(fill=tk.BOTH, expand=True)
+        frm = sc.content
         pad = {"padx": 6, "pady": 4}
 
         # Variables
@@ -327,8 +471,36 @@ class App(tk.Tk):
         self.var_overwrite = tk.BooleanVar(value=False)
         self.var_resume = tk.BooleanVar(value=True)
 
+        # New: LLM system prompt & hyperparameters (empty means use defaults)
+        self.var_temperature = tk.StringVar(value="")
+        self.var_top_p = tk.StringVar(value="")
+        self.var_top_k = tk.StringVar(value="")
+        self.var_repetition_penalty = tk.StringVar(value="")
+        self.var_length_penalty = tk.StringVar(value="")
+
         # Grid: 3 columns labels/entries/buttons
         row = 0
+        
+        # 🎨 主题选择器
+        theme_frame = ttk.LabelFrame(frm, text="🎨 界面主题", padding=(8, 6))
+        theme_frame.grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
+        
+        self.var_theme = tk.StringVar(value="minty")
+        theme_label = ttk.Label(theme_frame, text="选择主题:")
+        theme_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        
+        theme_options = ["cosmo", "litera", "lumen", "flatly", "united", "darkly", "cyborg", "superhero", "solar", "vapor", "minty"]
+        self.theme_combo = ttk.Combobox(theme_frame, textvariable=self.var_theme, values=theme_options, state="readonly", width=15)
+        self.theme_combo.grid(row=0, column=1, sticky="w", padx=(0, 8))
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_change)
+        
+        theme_info = ttk.Label(theme_frame, text="💡 选择后立即生效", foreground="gray")
+        theme_info.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        
+        # 配置主题框架的列权重
+        theme_frame.columnconfigure(2, weight=1)
+        row += 1
+        
         def add_entry(label, var, width=50, browse=None, col_span=2):
             nonlocal row
             ttk.Label(frm, text=label).grid(row=row, column=0, sticky="e", **pad)
@@ -340,17 +512,19 @@ class App(tk.Tk):
             return ent
 
         def pick_input():
-            p = filedialog.askopenfilename(initialdir=str(SCRIPT_DIR), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            p = filedialog.askopenfilename(initialdir=self._get_initial_dir(), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
             if p:
                 if not p.lower().endswith(".txt"):
                     messagebox.showerror("错误", "只支持 .txt 文本文件作为输入")
                     return
                 self.var_input.set(p)
+                self._remember_path(p)
 
         def pick_output():
-            p = filedialog.asksaveasfilename(initialdir=str(SCRIPT_DIR), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
             if p:
                 self.var_output.set(p)
+                self._remember_path(p)
 
         add_entry("Base URL", self.var_base)
         add_entry("API Key", self.var_key)
@@ -370,7 +544,7 @@ class App(tk.Tk):
 
         ttk.Label(frm, text="起始分块").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(frm, textvariable=self.var_start, width=10).grid(row=row, column=1, sticky="w", **pad)
-        ttk.Checkbutton(frm, text="仅将重叠当做上下文（不输出）", variable=self.var_ctx_only).grid(row=row, column=2, columnspan=2, sticky="w", **pad)
+        # 移除原先散落在这里的“仅将重叠当做上下文（不输出）”复选框，统一放到下方“开关选项”中
         row += 1
 
         ttk.Label(frm, text="超时(秒)").grid(row=row, column=0, sticky="e", **pad)
@@ -379,31 +553,81 @@ class App(tk.Tk):
         ttk.Entry(frm, textvariable=self.var_retries, width=10).grid(row=row, column=3, sticky="w", **pad)
         row += 1
 
-        ttk.Checkbutton(frm, text="出错后自动跳过", variable=self.var_skip).grid(row=row, column=0, columnspan=2, sticky="w", **pad)
-        ttk.Checkbutton(frm, text="使用流式响应", variable=self.var_stream).grid(row=row, column=2, columnspan=2, sticky="w", **pad)
+        # 统一的开关与二分参数分组，确保对齐
+        opts = ttk.LabelFrame(frm, text="开关选项")
+        opts.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        orow = 0
+        ttk.Checkbutton(opts, text="出错后自动跳过", variable=self.var_skip).grid(row=orow, column=0, sticky="w", padx=4, pady=2)
+        ttk.Checkbutton(opts, text="使用流式响应", variable=self.var_stream).grid(row=orow, column=1, sticky="w", padx=4, pady=2)
+        ttk.Checkbutton(opts, text="失败自动二分", variable=self.var_bisect).grid(row=orow, column=2, sticky="w", padx=4, pady=2)
+        ttk.Checkbutton(opts, text="仅将重叠当做上下文（不输出）", variable=self.var_ctx_only).grid(row=orow, column=3, sticky="w", padx=4, pady=2)
+        orow += 1
+
+        ttk.Checkbutton(opts, text="覆盖已存在输出 (overwrite)", variable=self.var_overwrite).grid(row=orow, column=0, sticky="w", padx=4, pady=2)
+        ttk.Checkbutton(opts, text="追加续写 (resume)", variable=self.var_resume).grid(row=orow, column=1, sticky="w", padx=4, pady=2)
+        orow += 1
+
+        # 二分参数与其输入框，放在同一分组，保持整齐
+        ttk.Label(opts, text="二分最小长度").grid(row=orow, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(opts, textvariable=self.var_minchars, width=10).grid(row=orow, column=1, sticky="we", padx=4, pady=2)
+        ttk.Label(opts, text="二分最大深度").grid(row=orow, column=2, sticky="e", padx=4, pady=2)
+        ttk.Entry(opts, textvariable=self.var_maxdepth, width=10).grid(row=orow, column=3, sticky="we", padx=4, pady=2)
+        for c in range(4):
+            opts.columnconfigure(c, weight=1, uniform="optscols")
         row += 1
 
-        ttk.Checkbutton(frm, text="失败自动二分", variable=self.var_bisect).grid(row=row, column=0, columnspan=2, sticky="w", **pad)
-        ttk.Label(frm, text="二分最小长度").grid(row=row, column=2, sticky="e", **pad)
-        ttk.Entry(frm, textvariable=self.var_minchars, width=10).grid(row=row, column=3, sticky="w", **pad)
+        # New section: System Prompt & Hyperparameters
+        lf = ttk.LabelFrame(frm, text="提示词与超参数（留空表示使用模型默认值）")
+        lf.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        # System prompt (multi-line)
+        ttk.Label(lf, text="系统提示词（可选）").grid(row=0, column=0, sticky="ne", padx=4, pady=4)
+        self.txt_sys_prompt = tk.Text(lf, height=5, wrap="word")
+        self.txt_sys_prompt.grid(row=0, column=1, columnspan=3, sticky="we", padx=4, pady=4)
+        
+        # 添加系统提示词框的鼠标悬停效果
+        self._setup_text_hover_effects(self.txt_sys_prompt)
+        # Hyperparams inputs
+        ttk.Label(lf, text="temperature").grid(row=1, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(lf, textvariable=self.var_temperature, width=10).grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(lf, text="top_p").grid(row=1, column=2, sticky="e", padx=4, pady=2)
+        ttk.Entry(lf, textvariable=self.var_top_p, width=10).grid(row=1, column=3, sticky="w", padx=4, pady=2)
+
+        ttk.Label(lf, text="top_k").grid(row=2, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(lf, textvariable=self.var_top_k, width=10).grid(row=2, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(lf, text="repetition_penalty").grid(row=2, column=2, sticky="e", padx=4, pady=2)
+        ttk.Entry(lf, textvariable=self.var_repetition_penalty, width=10).grid(row=2, column=3, sticky="w", padx=4, pady=2)
+
+        ttk.Label(lf, text="length_penalty").grid(row=3, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(lf, textvariable=self.var_length_penalty, width=10).grid(row=3, column=1, sticky="w", padx=4, pady=2)
+        # stretch inside labelframe
+        for c in range(4):
+            lf.columnconfigure(c, weight=1)
         row += 1
 
-        ttk.Label(frm, text="二分最大深度").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(frm, textvariable=self.var_maxdepth, width=10).grid(row=row, column=1, sticky="w", **pad)
-        ttk.Checkbutton(frm, text="覆盖已存在输出 (overwrite)", variable=self.var_overwrite).grid(row=row, column=2, sticky="w", **pad)
-        ttk.Checkbutton(frm, text="追加续写 (resume)", variable=self.var_resume).grid(row=row, column=3, sticky="w", **pad)
-        row += 1
-
-        # Controls: Start / Stop
+        # 控制按钮区域，右对齐，统一宽度
         ctl = ttk.Frame(frm)
-        ctl.grid(row=row, column=0, columnspan=4, sticky="we", **pad)
-        self.btn_start = ttk.Button(ctl, text="开始翻译", command=self._on_start_translate)
-        self.btn_stop = ttk.Button(ctl, text="停止", command=self._on_stop_translate)
-        self.btn_start.pack(side=tk.LEFT, padx=6)
-        self.btn_stop.pack(side=tk.LEFT, padx=6)
+        ctl.grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
+        
+        # 使用语义化按钮样式（如果 ttkbootstrap 可用）
+        try:
+            start_style = "success.TButton"  # 绿色开始按钮
+            stop_style = "danger.TButton"    # 红色停止按钮
+        except:
+            start_style = "TButton"
+            stop_style = "TButton"
+            
+        self.btn_start = ttk.Button(ctl, text="▶ 开始翻译", command=self._on_start_translate, 
+                                   style=start_style, width=12)
+        self.btn_start.grid(row=0, column=0, sticky="e", padx=4, pady=4)
+        
+        self.btn_stop = ttk.Button(ctl, text="⏹ 停止", command=self._on_stop_translate, 
+                                  style=stop_style, width=12)
+        self.btn_stop.grid(row=0, column=1, sticky="e", padx=4, pady=4)
+        
+        ctl.columnconfigure(0, weight=1)  # 让按钮右对齐
         row += 1
 
-        # Log and progress
+        # Log and progress (text area with its own scrollbar)
         self.status_var = tk.StringVar(value="就绪")
         self.progress = ttk.Progressbar(frm, orient="horizontal", mode="determinate")
         self.progress.grid(row=row, column=0, columnspan=4, sticky="we", **pad)
@@ -411,18 +635,44 @@ class App(tk.Tk):
         ttk.Label(frm, textvariable=self.status_var).grid(row=row, column=0, columnspan=4, sticky="w", **pad)
         row += 1
 
-        self.txt = tk.Text(frm, wrap="word", height=18, state=tk.DISABLED)
-        self.txt.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        frame_log = ttk.Frame(frm)
+        frame_log.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        self.txt = tk.Text(frame_log, wrap="word", height=16, state=tk.DISABLED)
+        vscroll = ttk.Scrollbar(frame_log, orient="vertical", command=self.txt.yview)
+        self.txt.configure(yscrollcommand=vscroll.set)
+        self.txt.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        # 绑定鼠标滚轮到日志区域（跨平台）
+        def _wheel_txt(event, _w=self.txt):
+            try:
+                if getattr(event, 'num', None) == 4:
+                    _w.yview_scroll(-1, "units"); return
+                if getattr(event, 'num', None) == 5:
+                    _w.yview_scroll(1, "units"); return
+                delta = int(getattr(event, 'delta', 0))
+                if delta == 0: return
+                step = -1 if delta > 0 else 1
+                _w.yview_scroll(step, "units")
+            except Exception:
+                pass
+        self.txt.bind("<MouseWheel>", _wheel_txt)
+        self.txt.bind("<Button-4>", _wheel_txt)
+        self.txt.bind("<Button-5>", _wheel_txt)
+        frame_log.rowconfigure(0, weight=1)
+        frame_log.columnconfigure(0, weight=1)
         frm.rowconfigure(row, weight=1)
         for c in range(4):
-            frm.columnconfigure(c, weight=1)
+            frm.columnconfigure(c, weight=1, uniform="maincols")
 
         # both runners: subprocess (dev) and in-process (frozen)
         self.runner = ProcessRunner(self.txt, self.progress, self.status_var)
         self.inproc = InProcessRunner(self.txt, self.progress, self.status_var)
 
     def _build_inspect_tab(self):
-        frm = self.tab_inspect
+        # Use scrollable container for small screens
+        sc = ScrollableFrame(self.tab_inspect)
+        sc.pack(fill=tk.BOTH, expand=True)
+        frm = sc.content
         pad = {"padx": 6, "pady": 4}
 
         self.var_ins_input = tk.StringVar(value=DEFAULTS["input"])
@@ -433,21 +683,24 @@ class App(tk.Tk):
 
         row = 0
         def pick_input():
-            p = filedialog.askopenfilename(initialdir=str(SCRIPT_DIR), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            p = filedialog.askopenfilename(initialdir=self._get_initial_dir(), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
             if p:
                 if not p.lower().endswith(".txt"):
                     messagebox.showerror("错误", "只支持 .txt 文本文件作为输入")
                     return
                 self.var_ins_input.set(p)
+                self._remember_path(p)
 
         def pick_output():
-            p = filedialog.asksaveasfilename(initialdir=str(SCRIPT_DIR), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
             if p:
                 self.var_output.set(p)
+                self._remember_path(p)
         def pick_export():
-            p = filedialog.asksaveasfilename(initialdir=str(SCRIPT_DIR), title="导出报告为...", defaultextension=".txt")
+            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="导出报告为...", defaultextension=".txt")
             if p:
                 self.var_ins_export.set(p)
+                self._remember_path(p)
 
         ttk.Label(frm, text="输入文件").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(frm, textvariable=self.var_ins_input, width=64).grid(row=row, column=1, sticky="we", **pad)
@@ -466,16 +719,42 @@ class App(tk.Tk):
 
         ctl = ttk.Frame(frm)
         ctl.grid(row=row, column=0, columnspan=4, sticky="we", **pad)
-        ttk.Button(ctl, text="预览到下方日志", command=self._on_inspect_preview).pack(side=tk.LEFT, padx=6)
-        ttk.Button(ctl, text="导出为文件", command=self._on_inspect_export).pack(side=tk.LEFT, padx=6)
+        ctl.columnconfigure(0, weight=1)
+        btn_preview = ttk.Button(ctl, text="预览到下方日志", command=self._on_inspect_preview, width=16)
+        btn_export = ttk.Button(ctl, text="导出为文件", command=self._on_inspect_export, width=12)
+        btn_preview.grid(row=0, column=1, sticky="e", padx=6)
+        btn_export.grid(row=0, column=2, sticky="w", padx=6)
         row += 1
 
         self.status_ins = tk.StringVar(value="就绪")
         ttk.Label(frm, textvariable=self.status_ins).grid(row=row, column=0, columnspan=4, sticky="w", **pad)
         row += 1
 
-        self.txt_ins = tk.Text(frm, wrap="word", height=18, state=tk.DISABLED)
-        self.txt_ins.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        frame_log = ttk.Frame(frm)
+        frame_log.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        self.txt_ins = tk.Text(frame_log, wrap="word", height=18, state=tk.DISABLED)
+        vscroll2 = ttk.Scrollbar(frame_log, orient="vertical", command=self.txt_ins.yview)
+        self.txt_ins.configure(yscrollcommand=vscroll2.set)
+        self.txt_ins.grid(row=0, column=0, sticky="nsew")
+        vscroll2.grid(row=0, column=1, sticky="ns")
+        # 绑定鼠标滚轮到检查页日志区域（跨平台）
+        def _wheel_txt_ins(event, _w=self.txt_ins):
+            try:
+                if getattr(event, 'num', None) == 4:
+                    _w.yview_scroll(-1, "units"); return
+                if getattr(event, 'num', None) == 5:
+                    _w.yview_scroll(1, "units"); return
+                delta = int(getattr(event, 'delta', 0))
+                if delta == 0: return
+                step = -1 if delta > 0 else 1
+                _w.yview_scroll(step, "units")
+            except Exception:
+                pass
+        self.txt_ins.bind("<MouseWheel>", _wheel_txt_ins)
+        self.txt_ins.bind("<Button-4>", _wheel_txt_ins)
+        self.txt_ins.bind("<Button-5>", _wheel_txt_ins)
+        frame_log.rowconfigure(0, weight=1)
+        frame_log.columnconfigure(0, weight=1)
         frm.rowconfigure(row, weight=1)
         for c in range(4):
             frm.columnconfigure(c, weight=1)
@@ -504,11 +783,33 @@ class App(tk.Tk):
         args += ["--auto-bisect" if self.var_bisect.get() else "--no-auto-bisect"]
         args += ["--overwrite" if self.var_overwrite.get() else "--no-overwrite"]
         args += ["--resume" if self.var_resume.get() else "--no-resume"]
+        # Optional system prompt & hyperparameters
+        try:
+            sys_prompt = self.txt_sys_prompt.get("1.0", "end-1c").strip()
+        except Exception:
+            sys_prompt = ""
+        if sys_prompt:
+            args += ["--system-prompt", sys_prompt]
+        t = self.var_temperature.get().strip()
+        if t:
+            args += ["--temperature", t]
+        tp = self.var_top_p.get().strip()
+        if tp:
+            args += ["--top-p", tp]
+        tkv = self.var_top_k.get().strip()
+        if tkv:
+            args += ["--top-k", tkv]
+        rp = self.var_repetition_penalty.get().strip()
+        if rp:
+            args += ["--repetition-penalty", rp]
+        lp = self.var_length_penalty.get().strip()
+        if lp:
+            args += ["--length-penalty", lp]
         return args
 
     def _gather_translate_kwargs(self) -> dict:
         """将界面参数映射为 translate_lmstudio.run_translation(**kwargs) 的入参。"""
-        return {
+        kwargs = {
             "input_path": self.var_input.get(),
             "output_path": self.var_output.get(),
             "base_url": self.var_base.get(),
@@ -528,6 +829,39 @@ class App(tk.Tk):
             "bisect_min_chars": int(self.var_minchars.get()),
             "bisect_max_depth": int(self.var_maxdepth.get()),
         }
+        # Optional parameters
+        try:
+            sys_prompt = self.txt_sys_prompt.get("1.0", "end-1c").strip()
+        except Exception:
+            sys_prompt = ""
+        if sys_prompt:
+            kwargs["system_prompt"] = sys_prompt
+        def _parse_float(s: str):
+            try:
+                return float(s)
+            except Exception:
+                return None
+        def _parse_int(s: str):
+            try:
+                return int(float(s))
+            except Exception:
+                return None
+        t = _parse_float(self.var_temperature.get().strip()) if self.var_temperature.get() else None
+        if t is not None:
+            kwargs["temperature"] = t
+        tp = _parse_float(self.var_top_p.get().strip()) if self.var_top_p.get() else None
+        if tp is not None:
+            kwargs["top_p"] = tp
+        tkv = _parse_int(self.var_top_k.get().strip()) if self.var_top_k.get() else None
+        if tkv is not None:
+            kwargs["top_k"] = tkv
+        rp = _parse_float(self.var_repetition_penalty.get().strip()) if self.var_repetition_penalty.get() else None
+        if rp is not None:
+            kwargs["repetition_penalty"] = rp
+        lp = _parse_float(self.var_length_penalty.get().strip()) if self.var_length_penalty.get() else None
+        if lp is not None:
+            kwargs["length_penalty"] = lp
+        return kwargs
 
     def _on_start_translate(self):
         # Basic checks
@@ -542,6 +876,8 @@ class App(tk.Tk):
         if not self.var_model.get():
             if not messagebox.askyesno("提示", "模型名未填写，仍然继续启动吗？"):
                 return
+        # Remember directory from input
+        self._remember_path(inp)
         # Route: in-process when frozen, else subprocess
         if getattr(sys, 'frozen', False):
             kwargs = self._gather_translate_kwargs()
@@ -645,11 +981,66 @@ class App(tk.Tk):
     def _on_inspect_export(self):
         p = self.var_ins_export.get()
         if not p:
-            p = filedialog.asksaveasfilename(initialdir=str(SCRIPT_DIR), title="导出报告为...", defaultextension=".txt")
+            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="导出报告为...", defaultextension=".txt")
             if not p:
                 return
         self._run_inspect(export_path=p)
 
+
+    def _on_theme_change(self, event=None):
+        """主题切换回调函数"""
+        try:
+            import ttkbootstrap as tb
+            new_theme = self.var_theme.get()
+            # 重新创建样式对象并应用新主题
+            style = tb.Style(theme=new_theme)
+            self._apply_custom_styles(style)
+            # 保存主题偏好
+            PREFS["theme"] = new_theme
+            _save_prefs(PREFS)
+        except Exception as e:
+            messagebox.showerror("主题切换失败", f"无法切换到主题 '{new_theme}':\n{e}")
+    
+    def _setup_text_hover_effects(self, text_widget):
+        """为Text控件设置鼠标悬停效果"""
+        def on_enter(event):
+            text_widget.configure(bg="#f0f8ff")  # 浅蓝色背景
+        
+        def on_leave(event):
+            text_widget.configure(bg="white")  # 恢复白色背景
+        
+        def on_focus_in(event):
+            text_widget.configure(bg="#e6f3ff")  # 聚焦时稍深的蓝色
+        
+        def on_focus_out(event):
+            text_widget.configure(bg="white")  # 失焦时恢复白色
+        
+        # 绑定事件
+        text_widget.bind("<Enter>", on_enter)
+        text_widget.bind("<Leave>", on_leave)
+        text_widget.bind("<FocusIn>", on_focus_in)
+        text_widget.bind("<FocusOut>", on_focus_out)
+    
+    def _apply_custom_styles(self, style):
+        """应用自定义样式配置"""
+        try:
+            style.configure("TNotebook.Tab", padding=(12, 6), font=("Segoe UI", 9))
+            style.configure("TButton", padding=(10, 6), font=("Segoe UI", 9))
+            style.configure("TCheckbutton", padding=(4, 3), font=("Segoe UI", 9))
+            style.configure("TLabelframe", padding=(12, 8), relief="flat", borderwidth=1)
+            style.configure("TLabelframe.Label", padding=(6, 2), font=("Segoe UI", 9, "bold"))
+            style.configure("TLabel", font=("Segoe UI", 9))
+            style.configure("TEntry", padding=(6, 4), font=("Segoe UI", 9))
+            
+            # 语义化按钮样式
+            try:
+                style.configure("success.TButton", font=("Segoe UI", 9, "bold"))
+                style.configure("danger.TButton", font=("Segoe UI", 9, "bold"))
+                style.configure("info.TButton", font=("Segoe UI", 9))
+            except:
+                pass
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = App()

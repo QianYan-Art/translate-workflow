@@ -118,26 +118,28 @@ def chunk_by_chars_pairs(sentences: List[str], max_chars: int, overlap_chars: in
     return pairs
 
 
-def build_messages(source_lang: str, target_lang: str, chunk: str) -> list:
-    system_prompt = (
+def build_messages(source_lang: str, target_lang: str, chunk: str, system_prompt: Optional[str] = None) -> list:
+    system_prompt_default = (
         f"You are a professional translator. Translate the user's text from {source_lang or 'the original language'} "
         f"to {target_lang}. Preserve original formatting, markdown structure, and line breaks. "
         f"Do not add explanations or comments. If there are code blocks or inline code, keep them unchanged."
     )
+    sys_prompt = system_prompt if (system_prompt and system_prompt.strip()) else system_prompt_default
     user_prompt = "Translate the following content. Output only the translation.\n\n" + chunk
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
 
-def build_messages_with_context(source_lang: str, target_lang: str, context: str, content: str) -> list:
+def build_messages_with_context(source_lang: str, target_lang: str, context: str, content: str, system_prompt: Optional[str] = None) -> list:
     """Build chat messages where 'context' is for understanding only and must not be translated/output."""
-    system_prompt = (
+    system_prompt_default = (
         f"You are a professional translator. Translate only the text in the 'Content' section from {source_lang or 'the original language'} "
         f"to {target_lang}. Use the 'Context' section only for understanding. Do NOT translate or include the Context in the output. "
         f"Preserve formatting, markdown structure, and line breaks in the translation."
     )
+    sys_prompt = system_prompt if (system_prompt and system_prompt.strip()) else system_prompt_default
     user_prompt = (
         "Here is additional context and the content to translate.\n\n"
         "Context (for reference only, DO NOT translate or output):\n" +
@@ -146,7 +148,7 @@ def build_messages_with_context(source_lang: str, target_lang: str, context: str
         f"```\n{content}\n```"
     )
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
@@ -161,8 +163,24 @@ def translate_chunk(
     use_stream: bool = True,
     skip_on_error: bool = False,
     chunk_index: int | None = None,
+    *,
+    temperature: float = 0.0,
+    top_p: Optional[float] = 1.0,
+    top_k: Optional[int] = 0,
+    repetition_penalty: Optional[float] = 0.0,
+    length_penalty: Optional[float] = 0.0,
 ) -> str:
     last_exc: Exception | None = None
+    # Build vendor-specific extras
+    def _extra_body():
+        extra: dict = {}
+        if top_k and top_k > 0:
+            extra["top_k"] = int(top_k)
+        if repetition_penalty and repetition_penalty > 0:
+            extra["repetition_penalty"] = float(repetition_penalty)
+        if length_penalty and length_penalty != 0:
+            extra["length_penalty"] = float(length_penalty)
+        return extra
     for attempt in range(1, retries + 1):
         try:
             if use_stream:
@@ -170,9 +188,11 @@ def translate_chunk(
                 stream = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0,
+                    temperature=temperature,
+                    top_p=top_p,
                     stream=True,
                     timeout=timeout,
+                    extra_body=_extra_body(),
                 )
                 for event in stream:  # ChatCompletionChunk events
                     try:
@@ -188,8 +208,10 @@ def translate_chunk(
                 resp = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0,
+                    temperature=temperature,
+                    top_p=top_p,
                     timeout=timeout,
+                    extra_body=_extra_body(),
                 )
                 content = resp.choices[0].message.content or ""
                 return content
@@ -241,12 +263,21 @@ def try_translate_unit(
     max_retries: int,
     use_stream: bool,
     chunk_index: int,
+    *,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    top_p: Optional[float] = 1.0,
+    top_k: Optional[int] = 0,
+    repetition_penalty: Optional[float] = 0.0,
+    length_penalty: Optional[float] = 0.0,
 ) -> str:
-    messages = build_messages_with_context(source_lang, target_lang, context, content)
+    messages = build_messages_with_context(source_lang, target_lang, context, content, system_prompt=system_prompt)
     return translate_chunk(
         client, model, messages,
         retries=max_retries, timeout=request_timeout, use_stream=use_stream,
         skip_on_error=False, chunk_index=chunk_index,
+        temperature=temperature, top_p=top_p, top_k=top_k,
+        repetition_penalty=repetition_penalty, length_penalty=length_penalty,
     )
 
 
@@ -264,6 +295,13 @@ def translate_with_bisect(
     min_chars: int,
     max_depth: int,
     depth: int = 0,
+    *,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    top_p: Optional[float] = 1.0,
+    top_k: Optional[int] = 0,
+    repetition_penalty: Optional[float] = 0.0,
+    length_penalty: Optional[float] = 0.0,
 ) -> Optional[str]:
     if depth >= max_depth or len(content) <= min_chars:
         return None
@@ -276,6 +314,9 @@ def translate_with_bisect(
         left_out = try_translate_unit(
             client, model, source_lang, target_lang, context, left,
             request_timeout, max_retries, use_stream, chunk_index,
+            system_prompt=system_prompt,
+            temperature=temperature, top_p=top_p, top_k=top_k,
+            repetition_penalty=repetition_penalty, length_penalty=length_penalty,
         )
     except Exception:
         # bisect left further
@@ -283,17 +324,26 @@ def translate_with_bisect(
             client, model, source_lang, target_lang, context, left,
             request_timeout, max_retries, use_stream, chunk_index,
             min_chars, max_depth, depth + 1,
+            system_prompt=system_prompt,
+            temperature=temperature, top_p=top_p, top_k=top_k,
+            repetition_penalty=repetition_penalty, length_penalty=length_penalty,
         )
     try:
         right_out = try_translate_unit(
             client, model, source_lang, target_lang, context, right,
             request_timeout, max_retries, use_stream, chunk_index,
+            system_prompt=system_prompt,
+            temperature=temperature, top_p=top_p, top_k=top_k,
+            repetition_penalty=repetition_penalty, length_penalty=length_penalty,
         )
     except Exception:
         right_out = translate_with_bisect(
             client, model, source_lang, target_lang, context, right,
             request_timeout, max_retries, use_stream, chunk_index,
             min_chars, max_depth, depth + 1,
+            system_prompt=system_prompt,
+            temperature=temperature, top_p=top_p, top_k=top_k,
+            repetition_penalty=repetition_penalty, length_penalty=length_penalty,
         )
     if left_out is not None and right_out is not None:
         # Join with a newline boundary to avoid accidental concatenation
@@ -386,6 +436,13 @@ def run_translation(
     auto_bisect_on_fail: bool = True,
     bisect_min_chars: int = 600,
     bisect_max_depth: int = 3,
+    # newly added llm options
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    top_k: int = 0,
+    repetition_penalty: float = 0.0,
+    length_penalty: float = 0.0,
 ) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -431,6 +488,9 @@ def run_translation(
             out_text = try_translate_unit(
                 client, model, source_lang, target_lang, ctx, content,
                 request_timeout, max_retries, use_stream, idx,
+                system_prompt=system_prompt,
+                temperature=temperature, top_p=top_p, top_k=top_k,
+                repetition_penalty=repetition_penalty, length_penalty=length_penalty,
             )
         except Exception as e:
             print(f"Primary translation failed for chunk {idx}: {type(e).__name__}: {e}")
@@ -441,6 +501,9 @@ def run_translation(
                     client, model, source_lang, target_lang, ctx, content,
                     request_timeout, max_retries, use_stream, idx,
                     bisect_min_chars, bisect_max_depth, 0,
+                    system_prompt=system_prompt,
+                    temperature=temperature, top_p=top_p, top_k=top_k,
+                    repetition_penalty=repetition_penalty, length_penalty=length_penalty,
                 )
             if out_text is None:
                 if skip_on_error:
@@ -579,11 +642,39 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         default=CONFIG["BISECT_MAX_DEPTH"],
         help="Maximum recursive bisect depth",
     )
+    # New: system prompt & hyperparameters
+    parser.add_argument(
+        "--system-prompt",
+        default=os.environ.get("LMSTUDIO_SYSTEM_PROMPT", ""),
+        help="Custom system prompt for the translator role (overrides default)",
+    )
+    parser.add_argument(
+        "--system-prompt-file",
+        help="Path to a text file containing the system prompt; overrides --system-prompt if provided",
+    )
+    parser.add_argument("--temperature", type=float, default=CONFIG.get("TEMPERATURE", 0.0), help="Sampling temperature (0.0-2.0, 0 for deterministic)")
+    parser.add_argument("--top-p", type=float, default=CONFIG.get("TOP_P", 1.0), help="Top-p nucleus sampling (0-1)")
+    parser.add_argument("--top-k", type=int, default=CONFIG.get("TOP_K", 0), help="Top-k sampling (vendor-specific, 0 means use default)")
+    parser.add_argument("--repetition-penalty", type=float, default=CONFIG.get("REPETITION_PENALTY", 0.0), help="Repetition penalty (vendor-specific, 0 to disable)")
+    parser.add_argument("--length-penalty", type=float, default=CONFIG.get("LENGTH_PENALTY", 0.0), help="Length penalty (vendor-specific, 0 to disable)")
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     ns = parse_args(sys.argv[1:])
+    # Resolve system prompt precedence
+    sys_prompt_val: Optional[str] = None
+    sp_file = getattr(ns, "system_prompt_file", None)
+    try:
+        if sp_file:
+            with open(sp_file, "r", encoding="utf-8") as f:
+                sys_prompt_val = f.read()
+        else:
+            sp_inline = getattr(ns, "system_prompt", "")
+            sys_prompt_val = sp_inline if sp_inline else None
+    except Exception as _e:
+        print(f"Warning: failed to read system prompt file: {_e}")
+        sys_prompt_val = None
     # Expose flags to run_translation scope via globals
     OVERWRITE_FLAG = bool(getattr(ns, "overwrite", False))
     RESUME_FLAG = bool(getattr(ns, "resume", False))
@@ -607,6 +698,12 @@ if __name__ == "__main__":
             auto_bisect_on_fail=bool(getattr(ns, "auto_bisect", CONFIG["AUTO_BISECT_ON_FAIL"])),
             bisect_min_chars=int(getattr(ns, "bisect_min_chars", CONFIG["BISECT_MIN_CHARS"])),
             bisect_max_depth=int(getattr(ns, "bisect_max_depth", CONFIG["BISECT_MAX_DEPTH"])),
+            system_prompt=sys_prompt_val,
+            temperature=float(getattr(ns, "temperature", 0.0)),
+            top_p=float(getattr(ns, "top_p", 1.0)),
+            top_k=int(getattr(ns, "top_k", 0)),
+            repetition_penalty=float(getattr(ns, "repetition_penalty", 0.0)),
+            length_penalty=float(getattr(ns, "length_penalty", 0.0)),
         )
     except KeyboardInterrupt:
         print("Interrupted by user.")

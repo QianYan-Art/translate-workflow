@@ -3,11 +3,14 @@
 # Core dependencies
 openai>=1.55.0
 
-# GUI dependencies (Python standard library, usually pre-installed)
-# tkinter - Required for GUI interface
+# GUI dependencies
+# tkinter - Required for GUI interface (Python standard library, usually pre-installed)
 # Note: On some Linux distributions, you may need to install tkinter separately:
 #   Ubuntu/Debian: sudo apt-get install python3-tk
 #   CentOS/RHEL/Fedora: sudo yum install tkinter or sudo dnf install python3-tkinter
+
+# Modern GUI theming
+ttkbootstrap>=1.10.1
 
 # Optional development dependencies
 # pytest>=8.0.0
