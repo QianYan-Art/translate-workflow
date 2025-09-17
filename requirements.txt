@@ -1,0 +1,13 @@
+# LM Studio Translator Dependencies
+
+# Core dependencies
+openai>=1.55.0
+
+# GUI dependencies (Python standard library, usually pre-installed)
+# tkinter - Required for GUI interface
+# Note: On some Linux distributions, you may need to install tkinter separately:
+#   Ubuntu/Debian: sudo apt-get install python3-tk
+#   CentOS/RHEL/Fedora: sudo yum install tkinter or sudo dnf install python3-tkinter
+
+# Optional development dependencies
+# pytest>=8.0.0
