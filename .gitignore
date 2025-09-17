@@ -6,7 +6,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -18,6 +17,15 @@ var/
 wheels/
 share/python-wheels/
 *.egg-info/
+
+# Archive files
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tar.bz2
+zip/
 .installed.cfg
 *.egg
 MANIFEST
