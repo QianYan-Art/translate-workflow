@@ -1,10 +1,11 @@
 {
   "theme": "minty",
-  "last_dir": "",
   "defaults": {
     "base_url": "http://localhost:1235/v1",
     "api_key": "lm-studio",
-    "model": "huihui-hunyuan-mt-chimera-7b-abliterated-i1",
+    "model": "",
+    "input": "whole.txt",
+    "output": "translated.txt",
     "source_lang": "auto",
     "target_lang": "zh",
     "chunk_size": 3000,
@@ -18,11 +19,18 @@
     "auto_bisect": true,
     "bisect_min_chars": 600,
     "bisect_max_depth": 3,
-    "temperature": "0.3",
-    "top_p": "0.9",
+    "hide_chain": false,
+    "chain_tag": "think",
+    "system_prompt": "",
+    "temperature": "",
+    "top_p": "",
     "top_k": "",
-    "repetition_penalty": "1.1",
-    "length_penalty": "",
-    "system_prompt": "你是一个专业的翻译助手。请准确、流畅地翻译以下文本，保持原文的语气和风格。对于专业术语，请使用标准的翻译。"
-  }
+    "repetition_penalty": "",
+    "length_penalty": ""
+  },
+  "paths": {
+    "input_dir": ".",
+    "output_dir": "."
+  },
+  "last_dir": "."
 }
