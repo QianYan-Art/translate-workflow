@@ -26,13 +26,30 @@ PYTHON_EXE = str(DEFAULT_PY if DEFAULT_PY.exists() else sys.executable)
 PREFS_FILE = SCRIPT_DIR / "gui_prefs.json"
 
 def _load_prefs() -> dict:
+    """
+    加载首选项：优先加载打包目录 dist/LM-Translate-GUI/gui_prefs.json，
+    再叠加当前脚本目录下的 gui_prefs.json（如存在），后者覆盖前者。
+    可在 prefs["paths"] 中提供 "input_dir" 与 "output_dir" 来分别记忆两个浏览路径。
+    """
+    merged: dict = {}
+    try:
+        dist_prefs = SCRIPT_DIR / "dist" / "LM-Translate-GUI" / "gui_prefs.json"
+        if dist_prefs.exists():
+            with open(dist_prefs, "r", encoding="utf-8") as f:
+                d = json.load(f) or {}
+                if isinstance(d, dict):
+                    merged.update(d)
+    except Exception:
+        pass
     try:
         if PREFS_FILE.exists():
             with open(PREFS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
+                d = json.load(f) or {}
+                if isinstance(d, dict):
+                    merged.update(d)
     except Exception:
         pass
-    return {}
+    return merged
 
 def _save_prefs(d: dict) -> None:
     try:
@@ -63,6 +80,9 @@ DEFAULTS = {
     "auto_bisect": True,
     "bisect_min_chars": 600,
     "bisect_max_depth": 3,
+    # 输出后处理默认值
+    "hide_chain": False,
+    "chain_tag": "think",
 }
 
 try:
@@ -88,6 +108,9 @@ try:
         "auto_bisect": cfg.get("AUTO_BISECT_ON_FAIL", DEFAULTS["auto_bisect"]),
         "bisect_min_chars": cfg.get("BISECT_MIN_CHARS", DEFAULTS["bisect_min_chars"]),
         "bisect_max_depth": cfg.get("BISECT_MAX_DEPTH", DEFAULTS["bisect_max_depth"]),
+        # 输出后处理
+        "hide_chain": cfg.get("HIDE_CHAIN", DEFAULTS["hide_chain"]),
+        "chain_tag": cfg.get("CHAIN_TAG", DEFAULTS["chain_tag"]),
     })
 except SystemExit:
     # openai missing during import; fall back to built-in defaults
@@ -391,12 +414,12 @@ class App(tk.Tk):
         try:
             try:
                 import ttkbootstrap as tb
-                # 正确的初始化方式：使用关键字参数指定主题，避免把 self 误当作 theme 传入
-                # 可选主题：cosmo(蓝白简洁), litera(文档风), lumen(亮白), flatly(扁平), united(橙红), 
-                # darkly(深色), cyborg(科技感), superhero(深蓝), solar(暖色), vapor(紫色), minty(薄荷绿)
-                THEME_NAME = "minty"  # 你可以改为: litera, lumen, flatly, united, darkly, cyborg 等
-                style = tb.Style(theme=THEME_NAME)
+                # 初始主题优先取用户首选项（持久保存 Style 以便动态切换）
+                INIT_THEME = PREFS.get("theme", "minty")
+                self._tb_style = tb.Style(theme=INIT_THEME)
+                style = self._tb_style
             except Exception:
+                self._tb_style = None
                 style = ttk.Style()
                 try:
                     style.theme_use("vista")
@@ -426,7 +449,20 @@ class App(tk.Tk):
         self._build_translate_tab()
         self._build_inspect_tab()
 
-    def _get_initial_dir(self) -> str:
+    def _get_initial_dir(self, kind: str | None = None) -> str:
+        """根据类型返回默认目录：
+        - kind == "input": 使用 PREFS.paths.input_dir
+        - kind == "output": 使用 PREFS.paths.output_dir
+        - 其他/缺省：fallback 到 last_dir 或脚本目录
+        """
+        try:
+            paths = PREFS.get("paths", {}) if isinstance(PREFS, dict) else {}
+            if kind == "input" and paths.get("input_dir"):
+                return str(Path(paths["input_dir"]))
+            if kind == "output" and paths.get("output_dir"):
+                return str(Path(paths["output_dir"]))
+        except Exception:
+            pass
         d = self._last_dir or PREFS.get("last_dir") or str(SCRIPT_DIR)
         try:
             return str(Path(d))
@@ -443,6 +479,32 @@ class App(tk.Tk):
                 return
             self._last_dir = str(d)
             PREFS["last_dir"] = self._last_dir
+            _save_prefs(PREFS)
+        except Exception:
+            pass
+
+    def _remember_input_path(self, selected_file: str) -> None:
+        try:
+            if not selected_file:
+                return
+            p = Path(selected_file)
+            d = p.parent if p.exists() or p.suffix else (p if p.is_dir() else p.parent)
+            if not d:
+                return
+            PREFS.setdefault("paths", {})["input_dir"] = str(d)
+            _save_prefs(PREFS)
+        except Exception:
+            pass
+
+    def _remember_output_path(self, selected_file: str) -> None:
+        try:
+            if not selected_file:
+                return
+            p = Path(selected_file)
+            d = p.parent if p.suffix else (p if p.is_dir() else p.parent)
+            if not d:
+                return
+            PREFS.setdefault("paths", {})["output_dir"] = str(d)
             _save_prefs(PREFS)
         except Exception:
             pass
@@ -475,6 +537,9 @@ class App(tk.Tk):
         self.var_maxdepth = tk.IntVar(value=DEFAULTS["bisect_max_depth"])
         self.var_overwrite = tk.BooleanVar(value=False)
         self.var_resume = tk.BooleanVar(value=True)
+        # 新增：隐藏思维链与自定义标签
+        self.var_hide_chain = tk.BooleanVar(value=DEFAULTS.get("hide_chain", False))
+        self.var_chain_tag = tk.StringVar(value=DEFAULTS.get("chain_tag", "think"))
 
         # New: LLM system prompt & hyperparameters (empty means use defaults)
         self.var_temperature = tk.StringVar(value=DEFAULTS.get("temperature", ""))
@@ -490,7 +555,7 @@ class App(tk.Tk):
         theme_frame = ttk.LabelFrame(frm, text="🎨 界面主题", padding=(8, 6))
         theme_frame.grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
         
-        self.var_theme = tk.StringVar(value="minty")
+        self.var_theme = tk.StringVar(value=PREFS.get("theme", "minty"))
         theme_label = ttk.Label(theme_frame, text="选择主题:")
         theme_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
         
@@ -517,19 +582,21 @@ class App(tk.Tk):
             return ent
 
         def pick_input():
-            p = filedialog.askopenfilename(initialdir=self._get_initial_dir(), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            p = filedialog.askopenfilename(initialdir=self._get_initial_dir("input"), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
             if p:
                 if not p.lower().endswith(".txt"):
                     messagebox.showerror("错误", "只支持 .txt 文本文件作为输入")
                     return
                 self.var_input.set(p)
                 self._remember_path(p)
+                self._remember_input_path(p)
 
         def pick_output():
-            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir("output"), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
             if p:
                 self.var_output.set(p)
                 self._remember_path(p)
+                self._remember_output_path(p)
 
         add_entry("Base URL", self.var_base)
         add_entry("API Key", self.var_key)
@@ -561,33 +628,46 @@ class App(tk.Tk):
         # 统一的开关与二分参数分组，确保对齐
         opts = ttk.LabelFrame(frm, text="开关选项")
         opts.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
-        orow = 0
-        ttk.Checkbutton(opts, text="出错后自动跳过", variable=self.var_skip).grid(row=orow, column=0, sticky="w", padx=4, pady=2)
-        ttk.Checkbutton(opts, text="使用流式响应", variable=self.var_stream).grid(row=orow, column=1, sticky="w", padx=4, pady=2)
-        ttk.Checkbutton(opts, text="失败自动二分", variable=self.var_bisect).grid(row=orow, column=2, sticky="w", padx=4, pady=2)
-        ttk.Checkbutton(opts, text="仅将重叠当做上下文（不输出）", variable=self.var_ctx_only).grid(row=orow, column=3, sticky="w", padx=4, pady=2)
-        orow += 1
-
-        ttk.Checkbutton(opts, text="覆盖已存在输出 (overwrite)", variable=self.var_overwrite).grid(row=orow, column=0, sticky="w", padx=4, pady=2)
-        ttk.Checkbutton(opts, text="追加续写 (resume)", variable=self.var_resume).grid(row=orow, column=1, sticky="w", padx=4, pady=2)
-        orow += 1
-
-        # 二分参数与其输入框，放在同一分组，保持整齐
-        ttk.Label(opts, text="二分最小长度").grid(row=orow, column=0, sticky="e", padx=4, pady=2)
-        ttk.Entry(opts, textvariable=self.var_minchars, width=10).grid(row=orow, column=1, sticky="we", padx=4, pady=2)
-        ttk.Label(opts, text="二分最大深度").grid(row=orow, column=2, sticky="e", padx=4, pady=2)
-        ttk.Entry(opts, textvariable=self.var_maxdepth, width=10).grid(row=orow, column=3, sticky="we", padx=4, pady=2)
-        for c in range(4):
+        # 使用 6 列布局，便于均匀分布与留白
+        for c in range(12):
             opts.columnconfigure(c, weight=1, uniform="optscols")
+        orow = 0
+        # 第一排（4 项）：短标签，四等分
+        ttk.Checkbutton(opts, text="出错后自动跳过", variable=self.var_skip).grid(row=orow, column=0, columnspan=3, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(opts, text="使用流式响应", variable=self.var_stream).grid(row=orow, column=3, columnspan=3, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(opts, text="隐藏思维链", variable=self.var_hide_chain).grid(row=orow, column=6, columnspan=3, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(opts, text="失败自动二分", variable=self.var_bisect).grid(row=orow, column=9, columnspan=3, sticky="w", padx=10, pady=4)
+        orow += 1
+        # 第二排（3 项）：长标签，三等分
+        ttk.Checkbutton(opts, text="追加续写 (resume)", variable=self.var_resume).grid(row=orow, column=0, columnspan=4, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(opts, text="覆盖已存在输出 (overwrite)", variable=self.var_overwrite).grid(row=orow, column=4, columnspan=4, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(opts, text="仅将重叠当做上下文（不输出）", variable=self.var_ctx_only).grid(row=orow, column=8, columnspan=4, sticky="w", padx=10, pady=4)
+        orow += 1
+
+        # 第三排：输入项，与第二排左侧对齐（标签占2列，输入框占2列）
+        ttk.Label(opts, text="思维链标签名").grid(row=orow, column=0, columnspan=2, sticky="w", padx=(10, 8), pady=4)
+        ttk.Entry(opts, textvariable=self.var_chain_tag, width=16).grid(row=orow, column=2, columnspan=2, sticky="w", padx=(0, 10), pady=4)
+        ttk.Label(opts, text="二分最小长度").grid(row=orow, column=4, columnspan=2, sticky="w", padx=(10, 8), pady=4)
+        ttk.Entry(opts, textvariable=self.var_minchars, width=16).grid(row=orow, column=6, columnspan=2, sticky="w", padx=(0, 10), pady=4)
+        ttk.Label(opts, text="二分最大深度").grid(row=orow, column=8, columnspan=2, sticky="w", padx=(10, 8), pady=4)
+        ttk.Entry(opts, textvariable=self.var_maxdepth, width=16).grid(row=orow, column=10, columnspan=2, sticky="w", padx=(0, 10), pady=4)
+        orow += 1
         row += 1
 
         # New section: System Prompt & Hyperparameters
         lf = ttk.LabelFrame(frm, text="提示词与超参数（留空表示使用模型默认值）")
         lf.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
-        # System prompt (multi-line)
+        # System prompt (multi-line with scrollbar)
         ttk.Label(lf, text="系统提示词（可选）").grid(row=0, column=0, sticky="ne", padx=4, pady=4)
-        self.txt_sys_prompt = tk.Text(lf, height=5, wrap="word")
-        self.txt_sys_prompt.grid(row=0, column=1, columnspan=3, sticky="we", padx=4, pady=4)
+        sp_frame = ttk.Frame(lf)
+        sp_frame.grid(row=0, column=1, columnspan=3, sticky="nsew", padx=4, pady=4)
+        sp_frame.rowconfigure(0, weight=1)
+        sp_frame.columnconfigure(0, weight=1)
+        self.txt_sys_prompt = tk.Text(sp_frame, height=6, wrap="word")
+        self.txt_sys_prompt.grid(row=0, column=0, sticky="nsew")
+        sp_scroll = ttk.Scrollbar(sp_frame, orient="vertical", command=self.txt_sys_prompt.yview)
+        sp_scroll.grid(row=0, column=1, sticky="ns")
+        self.txt_sys_prompt.configure(yscrollcommand=sp_scroll.set)
         
         # Set default system prompt if available
         default_system_prompt = DEFAULTS.get("system_prompt", "")
@@ -612,6 +692,7 @@ class App(tk.Tk):
         # stretch inside labelframe
         for c in range(4):
             lf.columnconfigure(c, weight=1)
+        lf.rowconfigure(0, weight=1)
         row += 1
 
         # 控制按钮区域，右对齐，统一宽度
@@ -793,6 +874,11 @@ class App(tk.Tk):
         args += ["--auto-bisect" if self.var_bisect.get() else "--no-auto-bisect"]
         args += ["--overwrite" if self.var_overwrite.get() else "--no-overwrite"]
         args += ["--resume" if self.var_resume.get() else "--no-resume"]
+        # 输出后处理
+        args += ["--hide-chain" if self.var_hide_chain.get() else "--no-hide-chain"]
+        tag = (self.var_chain_tag.get() or "think").strip()
+        if tag:
+            args += ["--chain-tag", tag]
         # Optional system prompt & hyperparameters
         try:
             sys_prompt = self.txt_sys_prompt.get("1.0", "end-1c").strip()
@@ -838,6 +924,9 @@ class App(tk.Tk):
             "auto_bisect_on_fail": bool(self.var_bisect.get()),
             "bisect_min_chars": int(self.var_minchars.get()),
             "bisect_max_depth": int(self.var_maxdepth.get()),
+            # 输出后处理参数
+            "hide_chain": bool(self.var_hide_chain.get()),
+            "chain_tag": (self.var_chain_tag.get() or "think").strip(),
         }
         # Optional parameters
         try:
@@ -1002,9 +1091,16 @@ class App(tk.Tk):
         try:
             import ttkbootstrap as tb
             new_theme = self.var_theme.get()
-            # 重新创建样式对象并应用新主题
-            style = tb.Style(theme=new_theme)
-            self._apply_custom_styles(style)
+            # 优先复用已持有的 Style；若不存在则创建一次
+            if getattr(self, "_tb_style", None) is None:
+                self._tb_style = tb.Style(theme=new_theme)
+            else:
+                try:
+                    self._tb_style.theme_use(new_theme)
+                except Exception:
+                    # 某些环境下 theme_use 不可用，退回重新创建
+                    self._tb_style = tb.Style(theme=new_theme)
+            self._apply_custom_styles(self._tb_style)
             # 保存主题偏好
             PREFS["theme"] = new_theme
             _save_prefs(PREFS)

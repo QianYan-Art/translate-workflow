@@ -2,8 +2,8 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8+-green.svg)
+![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
+![Python](https://img.shields.io/badge/python-3.9+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 
@@ -30,6 +30,7 @@
   - [系统提示词自定义](#系统提示词自定义)
   - [LLM 超参数调节](#llm-超参数调节)
   - [自动二分处理](#自动二分处理)
+  - [输出后处理](#输出后处理)
 - [故障排除](#-故障排除)
 - [更新日志](#-更新日志)
 - [许可证](#-许可证)
@@ -42,6 +43,7 @@
 - **图形界面**：直观的 GUI 界面，满足用户翻译需求
 - **主题定制**：11 种精美主题可选（cosmo、litera、darkly 等）
 - **智能交互**：实时进度显示、悬停效果、语义化按钮设计
+- **目录记忆**：自动记住最近使用的输入/输出目录，减少重复选择
 
 ### 🔧 高级定制
 - **提示词自定义**：支持自定义系统提示词和从文件加载
@@ -62,7 +64,7 @@
 
 ## 💻 系统要求
 
-- **Python**: 3.8 或更高版本
+- **Python**: 3.9 或更高版本
 - **操作系统**: Windows、Linux、macOS
 - **LM Studio**: 已安装并运行的 LM Studio 服务
 - **内存**: 建议 4GB 以上（取决于模型大小）
@@ -117,6 +119,7 @@ python inspect_chunks.py --input "input.txt" --chunks "1-5"
 1. **输入文件**：选择待翻译的文本文件
 2. **输出文件**：指定翻译结果保存路径
 3. **语言设置**：配置源语言（auto 自动检测）和目标语言
+4. **目录记忆**：自动记录并默认回填最近使用的输入/输出目录
 
 #### 🔧 参数调整
 - **分块大小**：控制每次翻译的文本长度（默认 3000 字符）
@@ -191,6 +194,7 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 | `TOP_K` | `0` | Top-K 采样（0 表示禁用） |
 | `REPETITION_PENALTY` | `0.0` | 重复惩罚（0 表示禁用） |
 | `LENGTH_PENALTY` | `0.0` | 长度惩罚（0 表示禁用） |
+| `CHAIN_TAG` | `think` | 思维链标签名（如 `think`=>`<think></think>`） |
 
 ### 布尔选项配置
 
@@ -202,6 +206,7 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 | `SKIP_ON_ERROR` | `True` | 出错后自动跳过并标记 |
 | `USE_STREAM` | `True` | 使用流式响应 |
 | `AUTO_BISECT_ON_FAIL` | `True` | 失败时自动二分重试 |
+| `HIDE_CHAIN` | `False` | 隐藏思维链块（如 `<think>...</think>`） |
 
 ---
 
@@ -232,6 +237,17 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 - **BISECT_MIN_CHARS** (600)：最小分块长度，低于此值不再拆分
 - **BISECT_MAX_DEPTH** (3)：最大递归深度，防止无限拆分
 - **语义边界**：优先在句号、换行符等自然断点处拆分
+
+### 输出后处理
+
+- 隐藏思维链：启用 `--hide-chain` 后移除如 `<think>...</think>` 的内容，可用 `--chain-tag` 指定自定义标签（例如 `thinking`）。
+- 背景提示清理：自动去除“（以下内容仅做背景信息，不输出）…（以下内容是正文）”提示段，以及与重叠上下文相关的标识（如“仅将重叠部分作为上下文，不输出”）的残留文本；同时支持英文从 `Context (for reference only...)` 到 `Content to translate (OUTPUT ONLY...)` 的提示段清理。
+- GUI 支持：在“开关选项”勾选“隐藏思维链”，并在“输出后处理”区域设置标签名。
+
+```bash
+python translate_lmstudio.py --hide-chain --chain-tag think \
+  --input whole.txt --output translated.txt
+```
 
 ---
 
@@ -274,7 +290,14 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 
 ## 📝 更新日志
 
-### v1.1.0 (2025-09-18) - GUI 美化更新
+### v1.2.0 (2025-10-22) - 上下文标识清理与目录记忆
+- 🧹 正则清理重叠上下文标识残留（“仅将重叠部分作为上下文，不输出”）
+- 🗂️ 目录记忆：记录并默认回填最近使用的输入/输出目录
+- 🧠 思维链隐藏：支持 `--hide-chain` 与 `--chain-tag`（CLI/GUI）
+- 📖 文档更新：README 区分 1.2.0 与 1.1.1，补充用法说明
+- 🐍 最低 Python 版本更新为 3.9+（兼容 BooleanOptionalAction）
+
+### v1.1.1 (2025-09-21) - 输出后处理与打包清理
 - 🎨 **界面升级**：集成 ttkbootstrap，提供 11 种精美主题
 - 🔧 **功能增强**：新增系统提示词自定义和 LLM 超参数调节
 - 💫 **交互优化**：添加悬停效果、焦点反馈和语义化按钮
@@ -297,6 +320,8 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 ---
 
 <div align="center">
+
+
 
 **如果这个项目对您有帮助，请给个 ⭐ Star！**
 

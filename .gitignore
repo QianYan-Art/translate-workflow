@@ -251,3 +251,6 @@ api_keys.txt
 *.db
 *.sqlite
 *.sqlite3
+
+# Ignore contributor guide if generated locally
+AGENTS.md

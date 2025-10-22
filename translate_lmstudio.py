@@ -41,6 +41,9 @@ CONFIG = {
     "AUTO_BISECT_ON_FAIL": True,                 # 启用失败自动二分：将失败段按语义点一分为二重试，递归直至上限
     "BISECT_MIN_CHARS": 600,                     # 二分最小长度：内容长度小于等于该值时不再继续二分
     "BISECT_MAX_DEPTH": 3,                       # 二分最大深度：限制递归层级，防止无限拆分
+    # 输出后处理：隐藏思维链与背景标记清理
+    "HIDE_CHAIN": False,                          # 是否隐藏思维链（如 <think>...</think>）
+    "CHAIN_TAG": "think",                        # 思维链包裹标签名（可自定义，如 "thinking" 映射为 <thinking>..</thinking>）
 }
 # === End User Config ===
 
@@ -353,50 +356,105 @@ def translate_with_bisect(
 
 
 def output_contains_failed_marker(output_path: str, idx: int) -> bool:
-     if not os.path.exists(output_path):
-         return False
-     marker = FAILED_MARKER_FMT.format(idx=idx)
-     legacy_pattern = re.compile(rf"【第{idx}段翻译失败：[^】]*】")
-     try:
-         with open(output_path, "r", encoding="utf-8") as f:
-             data = f.read()
-         if marker in data:
-             return True
-         if legacy_pattern.search(data) is not None:
-             return True
-         return False
-     except Exception:
-         return False
- 
- 
+    if not os.path.exists(output_path):
+        return False
+    marker = FAILED_MARKER_FMT.format(idx=idx)
+    legacy_pattern = re.compile(rf"【第{idx}段翻译失败：[^】]*】")
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            data = f.read()
+        if marker in data:
+            return True
+        if legacy_pattern.search(data) is not None:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def replace_failed_marker_in_output(output_path: str, idx: int, text: str) -> bool:
-     marker = FAILED_MARKER_FMT.format(idx=idx)
-     legacy_pattern = re.compile(rf"【第{idx}段翻译失败：[^】]*】")
-     combined_pattern = re.compile(re.escape(marker) + r"(?:\r?\n)?" + rf"(?:{legacy_pattern.pattern})?")
-     try:
-         with open(output_path, "r", encoding="utf-8") as f:
-             content = f.read()
-         replaced = False
-         # Prefer replacing the combined marker block (machine marker + optional human-readable line)
-         if combined_pattern.search(content) is not None:
-             content = combined_pattern.sub(text, content, count=1)
-             replaced = True
-         else:
-             # Fallback: replace whichever single marker exists
-             if marker in content:
-                 content = content.replace(marker, text, 1)
-                 replaced = True
-             elif legacy_pattern.search(content) is not None:
-                 content = legacy_pattern.sub(text, content, count=1)
-                 replaced = True
-         if not replaced:
-             return False
-         with open(output_path, "w", encoding="utf-8") as f:
-             f.write(content if content.endswith("\n") else (content + "\n"))
-         return True
-     except Exception as e:
-         print(f"Warning: failed to replace marker for chunk {idx}: {e}")
-         return False
+    marker = FAILED_MARKER_FMT.format(idx=idx)
+    legacy_pattern = re.compile(rf"【第{idx}段翻译失败：[^】]*】")
+    combined_pattern = re.compile(re.escape(marker) + r"(?:\r?\n)?" + rf"(?:{legacy_pattern.pattern})?")
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        replaced = False
+        # Prefer replacing the combined marker block (machine marker + optional human-readable line)
+        if combined_pattern.search(content) is not None:
+            content = combined_pattern.sub(text, content, count=1)
+            replaced = True
+        else:
+            # Fallback: replace whichever single marker exists
+            if marker in content:
+                content = content.replace(marker, text, 1)
+                replaced = True
+            elif legacy_pattern.search(content) is not None:
+                content = legacy_pattern.sub(text, content, count=1)
+                replaced = True
+        if not replaced:
+            return False
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(content if content.endswith("\n") else (content + "\n"))
+        return True
+    except Exception as e:
+        print(f"Warning: failed to replace marker for chunk {idx}: {e}")
+        return False
+
+
+def _clean_hidden_chain(text: str, tag: str) -> str:
+    """隐藏思维链：删除例如 <think>...</think> 或自定义标签及其内部内容。
+
+    参数:
+    - text: 待清理文本
+    - tag: 标签名（不带尖括号），如 "think"、"thinking"
+    """
+    if not tag:
+        tag = "think"
+    # 构造不区分大小写、允许属性/空白的匹配，最小匹配内部内容
+    pattern = re.compile(rf"<\s*{re.escape(tag)}\b[^>]*>[\s\S]*?<\s*/\s*{re.escape(tag)}\s*>", re.IGNORECASE)
+    return re.sub(pattern, "", text)
+
+
+def _clean_background_header(text: str) -> str:
+    """清理模型偶发输出的“上下文/正文提示段”泄漏：
+    1) 中文样式：『（以下内容仅做背景信息…不输出）……（以下内容是正文）』
+    2) 英文样式：从 'Context (for reference only...)' 到 'Content to translate (OUTPUT ONLY...)' 的提示文本（含代码块）
+    若未匹配到成对提示，保持原文。
+    """
+    s = text
+    # 中文成对提示
+    try:
+        start_cn = r"[\(（]\s*以下内容.*?背景信息[^）\)]*不输出[^）\)]*[\)）]"
+        end_cn = r"[\(（]\s*以下内容.*?正文[^）\)]*[\)）]"
+        pattern_cn = re.compile(start_cn + r"[\s\S]*?" + end_cn, re.IGNORECASE)
+        s = re.sub(pattern_cn, "", s)
+    except Exception:
+        pass
+    # 英文提示：移除从 Context... 到 Content to translate... 标题行（含之间的代码围栏），仅保留标题后的内容
+    try:
+        start_en = re.compile(r"Context\s*\(for\s+reference\s+only[^)]*\)\s*:\s*", re.IGNORECASE)
+        end_en = re.compile(r"Content\s+to\s+translate\s*\(OUTPUT\s+ONLY[^)]*\)\s*:\s*", re.IGNORECASE)
+        m1 = start_en.search(s)
+        m2 = end_en.search(s) if m1 else None
+        if m1 and m2 and m2.start() > m1.start():
+            # 删除 [m1.start(): m2.end()] 之间的文本（相当于去掉“Context…”到“Content to translate…”标题本身）
+            s = s[:m1.start()] + s[m2.end():]
+    except Exception:
+        pass
+    return s
+
+
+def postprocess_output(text: str, *, hide_chain: bool = False, chain_tag: str = "think") -> str:
+    """统一的输出后处理：
+    1) 可选隐藏思维链 <tag>…</tag>
+    2) 始终清理『（以下内容仅做背景信息，不输出）……（以下内容是正文）』泄漏
+    """
+    out = text or ""
+    if hide_chain:
+        out = _clean_hidden_chain(out, chain_tag or "think")
+    out = _clean_background_header(out)
+    return out
 
 
 def append_text_to_output(output_path: str, text: str) -> None:
@@ -443,6 +501,9 @@ def run_translation(
     top_k: int = 0,
     repetition_penalty: float = 0.0,
     length_penalty: float = 0.0,
+    # 输出后处理
+    hide_chain: bool = False,
+    chain_tag: str = "think",
 ) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -519,6 +580,8 @@ def run_translation(
                     else:
                         raise
         # If we reach here, we have out_text
+        # 后处理：隐藏思维链与背景标记清理
+        out_text = postprocess_output(out_text, hide_chain=hide_chain, chain_tag=chain_tag)
         # If previous run recorded a failed marker for this chunk, replace it in place; otherwise append
         if output_contains_failed_marker(output_path, idx):
             if replace_failed_marker_in_output(output_path, idx, out_text):
@@ -657,6 +720,18 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=CONFIG.get("TOP_K", 0), help="Top-k sampling (vendor-specific, 0 means use default)")
     parser.add_argument("--repetition-penalty", type=float, default=CONFIG.get("REPETITION_PENALTY", 0.0), help="Repetition penalty (vendor-specific, 0 to disable)")
     parser.add_argument("--length-penalty", type=float, default=CONFIG.get("LENGTH_PENALTY", 0.0), help="Length penalty (vendor-specific, 0 to disable)")
+    # 输出后处理：隐藏思维链与自定义标签
+    parser.add_argument(
+        "--hide-chain",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG.get("HIDE_CHAIN", False),
+        help="Hide chain-of-thought blocks like <think>...</think> from outputs",
+    )
+    parser.add_argument(
+        "--chain-tag",
+        default=CONFIG.get("CHAIN_TAG", "think"),
+        help="Tag name used to wrap chain-of-thought (e.g., 'think' => <think></think>)",
+    )
     return parser.parse_args(argv)
 
 
@@ -704,6 +779,8 @@ if __name__ == "__main__":
             top_k=int(getattr(ns, "top_k", 0)),
             repetition_penalty=float(getattr(ns, "repetition_penalty", 0.0)),
             length_penalty=float(getattr(ns, "length_penalty", 0.0)),
+            hide_chain=bool(getattr(ns, "hide_chain", CONFIG.get("HIDE_CHAIN", False))),
+            chain_tag=str(getattr(ns, "chain_tag", CONFIG.get("CHAIN_TAG", "think")) or "think"),
         )
     except KeyboardInterrupt:
         print("Interrupted by user.")

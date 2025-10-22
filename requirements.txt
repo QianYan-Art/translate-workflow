@@ -1,5 +1,7 @@
 # LM Studio Translator Dependencies
 
+# Requires Python 3.9+ (argparse.BooleanOptionalAction)
+
 # Core dependencies
 openai>=1.55.0
 
