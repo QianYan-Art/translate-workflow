@@ -3,16 +3,7 @@ import os
 import re
 import sys
 import time
-from typing import List, Optional, Tuple
-
-try:
-    from openai import OpenAI
-except ImportError:
-    print(
-        "The 'openai' package is required. Please install it first, e.g.:\n  uv pip install --python .venv\\Scripts\\python openai\n",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+from typing import List, Optional, Tuple, Any
 
 # Output behavior flags (can be overridden by CLI)
 OVERWRITE_FLAG = False
@@ -44,6 +35,12 @@ CONFIG = {
     # 输出后处理：隐藏思维链与背景标记清理
     "HIDE_CHAIN": False,                          # 是否隐藏思维链（如 <think>...</think>）
     "CHAIN_TAG": "think",                        # 思维链包裹标签名（可自定义，如 "thinking" 映射为 <thinking>..</thinking>）
+    # PDF 识别默认配置
+    "PDF_RECOGNIZER": "auto",
+    "VLM_URL": "",
+    "VLM_KEY": "",
+    "PDF_DPI": 200,
+    "PDF_PAGES": "",
 }
 # === End User Config ===
 
@@ -157,7 +154,7 @@ def build_messages_with_context(source_lang: str, target_lang: str, context: str
 
 
 def translate_chunk(
-    client: OpenAI,
+    client: Any,
     model: str,
     messages: list,
     retries: int = 3,
@@ -256,7 +253,7 @@ def find_split_point(s: str) -> int:
 
 
 def try_translate_unit(
-    client: OpenAI,
+    client: Any,
     model: str,
     source_lang: str,
     target_lang: str,
@@ -285,7 +282,7 @@ def try_translate_unit(
 
 
 def translate_with_bisect(
-    client: OpenAI,
+    client: Any,
     model: str,
     source_lang: str,
     target_lang: str,
@@ -504,11 +501,15 @@ def run_translation(
     # 输出后处理
     hide_chain: bool = False,
     chain_tag: str = "think",
+    pdf_recognition: Optional[dict] = None,
 ) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
-    with open(input_path, "r", encoding="utf-8") as f:
-        text = f.read()
+    try:
+        from document_loader import load_document
+        text = load_document(input_path, pdf_recognition=pdf_recognition)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load input document: {e}")
 
     sentences = split_sentences(text)
 
@@ -539,6 +540,10 @@ def run_translation(
                 return
             open(output_path, "w", encoding="utf-8").close()
 
+    try:
+        from openai import OpenAI
+    except Exception as _e:
+        raise RuntimeError("OpenAI client is not available. Please install 'openai'.")
     client = OpenAI(base_url=base_url, api_key=api_key)
 
     print(f"Total chunks: {total}. Starting translation using model '{model}' at {base_url}... (resuming from chunk {start_idx})")
@@ -732,6 +737,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         default=CONFIG.get("CHAIN_TAG", "think"),
         help="Tag name used to wrap chain-of-thought (e.g., 'think' => <think></think>)",
     )
+    # PDF recognition
+    parser.add_argument("--pdf-recognizer", choices=["auto","vlm","none"], default=CONFIG.get("PDF_RECOGNIZER","auto"), help="PDF recognition mode")
+    parser.add_argument("--vlm-url", default=CONFIG.get("VLM_URL",""), help="VLM service URL")
+    parser.add_argument("--vlm-key", default=CONFIG.get("VLM_KEY",""), help="VLM service key")
+    parser.add_argument("--pdf-dpi", type=int, default=CONFIG.get("PDF_DPI",200), help="PDF render DPI")
+    parser.add_argument("--pdf-pages", default=CONFIG.get("PDF_PAGES",""), help="PDF pages spec, e.g. '1-3,7'")
     return parser.parse_args(argv)
 
 
@@ -781,6 +792,13 @@ if __name__ == "__main__":
             length_penalty=float(getattr(ns, "length_penalty", 0.0)),
             hide_chain=bool(getattr(ns, "hide_chain", CONFIG.get("HIDE_CHAIN", False))),
             chain_tag=str(getattr(ns, "chain_tag", CONFIG.get("CHAIN_TAG", "think")) or "think"),
+            pdf_recognition={
+                "mode": getattr(ns, "pdf_recognizer", CONFIG.get("PDF_RECOGNIZER","auto")),
+                "vlm_url": getattr(ns, "vlm_url", CONFIG.get("VLM_URL","")),
+                "vlm_key": getattr(ns, "vlm_key", CONFIG.get("VLM_KEY","")),
+                "dpi": int(getattr(ns, "pdf_dpi", CONFIG.get("PDF_DPI",200))),
+                "pages": getattr(ns, "pdf_pages", CONFIG.get("PDF_PAGES","")) or None,
+            },
         )
     except KeyboardInterrupt:
         print("Interrupted by user.")

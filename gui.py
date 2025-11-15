@@ -33,7 +33,10 @@ def _load_prefs() -> dict:
     """
     merged: dict = {}
     try:
-        dist_prefs = SCRIPT_DIR / "dist" / "LM-Translate-GUI" / "gui_prefs.json"
+        dist_prefs = (
+            (SCRIPT_DIR / "gui_prefs.json") if getattr(sys, 'frozen', False)
+            else (SCRIPT_DIR / "dist" / "LM-Translate-GUI" / "gui_prefs.json")
+        )
         if dist_prefs.exists():
             with open(dist_prefs, "r", encoding="utf-8") as f:
                 d = json.load(f) or {}
@@ -411,30 +414,24 @@ class App(tk.Tk):
         self.minsize(900, 600)
 
         # 优化主题与基础样式：在 Windows 用 vista，其它平台退回 clam；统一一些控件的 padding
+        style = ttk.Style()
         try:
+            style.theme_use("vista")
+        except tk.TclError:
             try:
-                import ttkbootstrap as tb
-                # 初始主题优先取用户首选项（持久保存 Style 以便动态切换）
-                INIT_THEME = PREFS.get("theme", "minty")
-                self._tb_style = tb.Style(theme=INIT_THEME)
-                style = self._tb_style
-            except Exception:
-                self._tb_style = None
-                style = ttk.Style()
-                try:
-                    style.theme_use("vista")
-                except tk.TclError:
-                    try:
-                        style.theme_use("clam")
-                    except tk.TclError:
-                        pass
+                style.theme_use("clam")
+            except tk.TclError:
+                pass
             style.configure("TNotebook.Tab", padding=(10, 4))
             style.configure("TButton", padding=(8, 4))
             style.configure("TCheckbutton", padding=(2, 2))
             style.configure("TLabelframe", padding=(8, 6))
             style.configure("TLabelframe.Label", padding=(4, 0))
-        except Exception:
-            pass
+            try:
+                if getattr(self, "_tb_style", None):
+                    self._apply_custom_styles(self._tb_style)
+            except Exception:
+                pass
         # 创建 Notebook（标签页容器）
         self.notebook = ttk.Notebook(self)
         self.tab_translate = ttk.Frame(self.notebook)
@@ -547,27 +544,32 @@ class App(tk.Tk):
         self.var_top_k = tk.StringVar(value=DEFAULTS.get("top_k", ""))
         self.var_repetition_penalty = tk.StringVar(value=DEFAULTS.get("repetition_penalty", ""))
         self.var_length_penalty = tk.StringVar(value=DEFAULTS.get("length_penalty", ""))
+        pdf_cfg = PREFS.get("pdf", {}) if isinstance(PREFS, dict) else {}
+        self.var_pdf_mode = tk.StringVar(value=(pdf_cfg.get("mode") or "auto"))
+        self.var_vlm_url = tk.StringVar(value=(pdf_cfg.get("vlm_url") or ""))
+        self.var_vlm_key = tk.StringVar(value=(pdf_cfg.get("vlm_key") or ""))
+        try:
+            self.var_pdf_dpi = tk.IntVar(value=int(pdf_cfg.get("dpi") or 200))
+        except Exception:
+            self.var_pdf_dpi = tk.IntVar(value=200)
+        self.var_pdf_pages = tk.StringVar(value=(pdf_cfg.get("pages") or ""))
 
         # Grid: 3 columns labels/entries/buttons
         row = 0
         
-        # 🎨 主题选择器
-        theme_frame = ttk.LabelFrame(frm, text="🎨 界面主题", padding=(8, 6))
+        # 主题选择
+        theme_frame = ttk.LabelFrame(frm, text="界面主题", padding=(8, 6))
         theme_frame.grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
-        
         self.var_theme = tk.StringVar(value=PREFS.get("theme", "minty"))
-        theme_label = ttk.Label(theme_frame, text="选择主题:")
-        theme_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        
+        ttk.Label(theme_frame, text="选择主题").grid(row=0, column=0, sticky="w", padx=(0, 8))
         theme_options = ["cosmo", "litera", "lumen", "flatly", "united", "darkly", "cyborg", "superhero", "solar", "vapor", "minty"]
         self.theme_combo = ttk.Combobox(theme_frame, textvariable=self.var_theme, values=theme_options, state="readonly", width=15)
         self.theme_combo.grid(row=0, column=1, sticky="w", padx=(0, 8))
         self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_change)
-        
-        theme_info = ttk.Label(theme_frame, text="💡 选择后立即生效", foreground="gray")
-        theme_info.grid(row=0, column=2, sticky="w", padx=(8, 0))
-        
-        # 配置主题框架的列权重
+        try:
+            self._on_theme_change()
+        except Exception:
+            pass
         theme_frame.columnconfigure(2, weight=1)
         row += 1
         
@@ -582,17 +584,39 @@ class App(tk.Tk):
             return ent
 
         def pick_input():
-            p = filedialog.askopenfilename(initialdir=self._get_initial_dir("input"), title="选择输入文件", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            p = filedialog.askopenfilename(
+                initialdir=self._get_initial_dir("input"),
+                title="选择输入文件",
+                filetypes=[
+                    ("Markdown", "*.md"),
+                    ("PDF", "*.pdf"),
+                    ("Word", "*.docx"),
+                    ("Text", "*.txt"),
+                    ("All files", "*.*"),
+                ],
+            )
             if p:
-                if not p.lower().endswith(".txt"):
-                    messagebox.showerror("错误", "只支持 .txt 文本文件作为输入")
-                    return
                 self.var_input.set(p)
                 self._remember_path(p)
                 self._remember_input_path(p)
+                try:
+                    self._toggle_pdf_panel()
+                except Exception:
+                    pass
 
         def pick_output():
-            p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir("output"), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            inp = self.var_input.get().lower()
+            def_ext = ".md" if inp.endswith(".md") else ".txt"
+            p = filedialog.asksaveasfilename(
+                initialdir=self._get_initial_dir("output"),
+                title="选择输出文件",
+                defaultextension=def_ext,
+                filetypes=[
+                    ("Markdown", "*.md"),
+                    ("Text", "*.txt"),
+                    ("All files", "*.*"),
+                ],
+            )
             if p:
                 self.var_output.set(p)
                 self._remember_path(p)
@@ -612,6 +636,23 @@ class App(tk.Tk):
         ttk.Entry(frm, textvariable=self.var_chunk, width=10).grid(row=row, column=1, sticky="w", **pad)
         ttk.Label(frm, text="重叠字符").grid(row=row, column=2, sticky="e", **pad)
         ttk.Entry(frm, textvariable=self.var_overlap, width=10).grid(row=row, column=3, sticky="w", **pad)
+        row += 1
+
+        self.pdf_panel = ttk.LabelFrame(frm, text="PDF 识别选项")
+        self.pdf_panel.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        for c in range(4):
+            self.pdf_panel.columnconfigure(c, weight=1)
+        ttk.Label(self.pdf_panel, text="识别方式").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Combobox(self.pdf_panel, textvariable=self.var_pdf_mode, values=["auto","vlm","none"], state="readonly", width=10).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(self.pdf_panel, text="VLM URL").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Entry(self.pdf_panel, textvariable=self.var_vlm_url, width=32).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(self.pdf_panel, text="VLM Key").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Entry(self.pdf_panel, textvariable=self.var_vlm_key, show="*", width=32).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(self.pdf_panel, text="DPI").grid(row=1, column=2, sticky="e", **pad)
+        ttk.Entry(self.pdf_panel, textvariable=self.var_pdf_dpi, width=10).grid(row=1, column=3, sticky="w", **pad)
+        ttk.Label(self.pdf_panel, text="页范围").grid(row=2, column=0, sticky="e", **pad)
+        ttk.Entry(self.pdf_panel, textvariable=self.var_pdf_pages, width=20).grid(row=2, column=1, sticky="w", **pad)
+        self.pdf_panel.grid_remove()
         row += 1
 
         ttk.Label(frm, text="起始分块").grid(row=row, column=0, sticky="e", **pad)
@@ -674,8 +715,7 @@ class App(tk.Tk):
         if default_system_prompt:
             self.txt_sys_prompt.insert("1.0", default_system_prompt)
         
-        # 添加系统提示词框的鼠标悬停效果
-        self._setup_text_hover_effects(self.txt_sys_prompt)
+        
         # Hyperparams inputs
         ttk.Label(lf, text="temperature").grid(row=1, column=0, sticky="e", padx=4, pady=2)
         ttk.Entry(lf, textvariable=self.var_temperature, width=10).grid(row=1, column=1, sticky="w", padx=4, pady=2)
@@ -700,18 +740,14 @@ class App(tk.Tk):
         ctl.grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
         
         # 使用语义化按钮样式（如果 ttkbootstrap 可用）
-        try:
-            start_style = "success.TButton"  # 绿色开始按钮
-            stop_style = "danger.TButton"    # 红色停止按钮
-        except:
-            start_style = "TButton"
-            stop_style = "TButton"
+        start_style = "TButton"
+        stop_style = "TButton"
             
-        self.btn_start = ttk.Button(ctl, text="▶ 开始翻译", command=self._on_start_translate, 
+        self.btn_start = ttk.Button(ctl, text="开始翻译", command=self._on_start_translate, 
                                    style=start_style, width=12)
         self.btn_start.grid(row=0, column=0, sticky="e", padx=4, pady=4)
         
-        self.btn_stop = ttk.Button(ctl, text="⏹ 停止", command=self._on_stop_translate, 
+        self.btn_stop = ttk.Button(ctl, text="停止", command=self._on_stop_translate, 
                                   style=stop_style, width=12)
         self.btn_stop.grid(row=0, column=1, sticky="e", padx=4, pady=4)
         
@@ -901,6 +937,16 @@ class App(tk.Tk):
         lp = self.var_length_penalty.get().strip()
         if lp:
             args += ["--length-penalty", lp]
+        inp = self.var_input.get().lower()
+        if inp.endswith('.pdf'):
+            args += ["--pdf-recognizer", (self.var_pdf_mode.get() or "auto")]
+            if self.var_vlm_url.get():
+                args += ["--vlm-url", self.var_vlm_url.get()]
+            if self.var_vlm_key.get():
+                args += ["--vlm-key", self.var_vlm_key.get()]
+            args += ["--pdf-dpi", str(int(self.var_pdf_dpi.get()))]
+            if self.var_pdf_pages.get():
+                args += ["--pdf-pages", self.var_pdf_pages.get()]
         return args
 
     def _gather_translate_kwargs(self) -> dict:
@@ -960,6 +1006,15 @@ class App(tk.Tk):
         lp = _parse_float(self.var_length_penalty.get().strip()) if self.var_length_penalty.get() else None
         if lp is not None:
             kwargs["length_penalty"] = lp
+        inp = self.var_input.get().lower()
+        if inp.endswith('.pdf'):
+            kwargs["pdf_recognition"] = {
+                "mode": (self.var_pdf_mode.get() or "auto"),
+                "vlm_url": self.var_vlm_url.get(),
+                "vlm_key": self.var_vlm_key.get(),
+                "dpi": int(self.var_pdf_dpi.get()),
+                "pages": (self.var_pdf_pages.get() or None),
+            }
         return kwargs
 
     def _on_start_translate(self):
@@ -968,15 +1023,29 @@ class App(tk.Tk):
         if not inp or not os.path.exists(inp):
             if not messagebox.askyesno("提示", "输入文件不存在，仍然继续启动吗？"):
                 return
-        # Enforce .txt input
-        if not inp.lower().endswith('.txt'):
-            messagebox.showerror("错误", "输入文件必须是 .txt 文本文件")
+        # 支持 .txt/.md/.pdf/.docx 输入
+        if not any(inp.lower().endswith(ext) for ext in ('.txt', '.md', '.pdf', '.docx')):
+            messagebox.showerror("错误", "仅支持 .txt/.md/.pdf/.docx 作为输入文件")
             return
+        try:
+            self._toggle_pdf_panel()
+        except Exception:
+            pass
         if not self.var_model.get():
             if not messagebox.askyesno("提示", "模型名未填写，仍然继续启动吗？"):
                 return
         # Remember directory from input
         self._remember_path(inp)
+        try:
+            PREFS.setdefault("pdf", {})
+            PREFS["pdf"]["mode"] = (self.var_pdf_mode.get() or "auto")
+            PREFS["pdf"]["vlm_url"] = self.var_vlm_url.get()
+            PREFS["pdf"]["vlm_key"] = self.var_vlm_key.get()
+            PREFS["pdf"]["dpi"] = int(self.var_pdf_dpi.get())
+            PREFS["pdf"]["pages"] = (self.var_pdf_pages.get() or "")
+            _save_prefs(PREFS)
+        except Exception:
+            pass
         # Route: in-process when frozen, else subprocess
         if getattr(sys, 'frozen', False):
             kwargs = self._gather_translate_kwargs()
@@ -1106,6 +1175,13 @@ class App(tk.Tk):
             _save_prefs(PREFS)
         except Exception as e:
             messagebox.showerror("主题切换失败", f"无法切换到主题 '{new_theme}':\n{e}")
+
+    def _toggle_pdf_panel(self):
+        p = self.var_input.get().lower()
+        if p.endswith('.pdf'):
+            self.pdf_panel.grid()
+        else:
+            self.pdf_panel.grid_remove()
     
     def _setup_text_hover_effects(self, text_widget):
         """为Text控件设置鼠标悬停效果"""
