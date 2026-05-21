@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
@@ -75,11 +75,15 @@
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/lm-studio-translator.git
-cd lm-studio-translator
+git clone https://github.com/QianYan-Art/translate-workflow.git
+cd translate-workflow
 ```
 
-### 2. 安装依赖
+### 2. 安装依赖（推荐使用 uv）
+```bash
+uv sync
+```
+或
 ```bash
 pip install -r requirements.txt
 ```
@@ -116,7 +120,7 @@ python inspect_chunks.py --input "input.txt" --chunks "1-5"
 - 主题选择后立即生效
 
 #### 文件配置
-1. **输入文件**：选择待翻译的文本文件
+1. **输入文件**：选择待翻译的文本文件（支持 .txt/.md/.pdf/.docx）
 2. **输出文件**：指定翻译结果保存路径
 3. **语言设置**：配置源语言（auto 自动检测）和目标语言
 4. **目录记忆**：自动记录并默认回填最近使用的输入/输出目录
@@ -133,9 +137,18 @@ python inspect_chunks.py --input "input.txt" --chunks "1-5"
 
 ## 打包程序
 
-### dist 文件夹说明
+### 打包方式
 
-`dist` 文件夹包含已打包的可执行程序与配置文件，无需安装 Python 环境即可直接运行：
+使用 uv 管理依赖，PyInstaller 打包：
+
+```bash
+uv add --dev pyinstaller
+uv run pyinstaller --noconfirm --onedir --windowed --name "LM-Translate-GUI" --add-data "gui_prefs.template.json;." --hidden-import "ttkbootstrap" --collect-all ttkbootstrap --hidden-import "pdfminer" --collect-all pdfminer gui.py
+```
+
+打包产物位于 `dist/LM-Translate-GUI/`，压缩包位于 `zip/LM-Translate-GUI-v1.3.1.zip`。
+
+### dist 文件夹说明
 
 ```
 dist/
@@ -147,7 +160,7 @@ dist/
 
 ### 使用方法
 
-1. **直接运行**：双击 `LM-Translate-GUI.exe` 启动图形界面（启动时读取同目录 `gui_prefs.json`）
+1. **直接运行**：双击 `LM-Translate-GUI.exe` 启动图形界面
 2. **便携使用**：整个 `LM-Translate-GUI` 文件夹可以复制到任何位置使用
 3. **系统要求**：Windows 10/11 x64 系统
 
@@ -158,18 +171,6 @@ dist/
 - 程序会自动保存界面设置到 `gui_prefs.json`
 - 如需修改默认主题与识别配置，直接编辑 `dist/LM-Translate-GUI/gui_prefs.json`
 - 打包模式下不依赖全局 Python 与包管理
-
-### 分块检查工具
-
-检查文本如何被分块，优化翻译效果：
-
-```bash
-# 检查特定分块
-python inspect_chunks.py --input "input.txt" --chunks "1,5,10-15"
-
-# 调整分块参数
-python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
-```
 
 ---
 
@@ -240,8 +241,8 @@ python inspect_chunks.py --input "input.txt" --chunk-size 2000 --overlap 150
 ### 输出后处理
 
 - 隐藏思维链：启用 `--hide-chain` 后移除如 `<think>...</think>` 的内容，可用 `--chain-tag` 指定自定义标签（例如 `thinking`）。
-- 背景提示清理：自动去除“（以下内容仅做背景信息，不输出）…（以下内容是正文）”提示段，以及与重叠上下文相关的标识（如“仅将重叠部分作为上下文，不输出”）的残留文本；同时支持英文从 `Context (for reference only...)` 到 `Content to translate (OUTPUT ONLY...)` 的提示段清理。
-- GUI 支持：在“开关选项”勾选“隐藏思维链”，并在“输出后处理”区域设置标签名。
+- 背景提示清理：自动去除"（以下内容仅做背景信息，不输出）…（以下内容是正文）"提示段，以及与重叠上下文相关的标识的残留文本；同时支持英文从 `Context (for reference only...)` 到 `Content to translate (OUTPUT ONLY...)` 的提示段清理。
+- GUI 支持：在"开关选项"勾选"隐藏思维链"，并在"输出后处理"区域设置标签名。
 
 ```bash
 python translate_lmstudio.py --hide-chain --chain-tag think \
@@ -289,18 +290,30 @@ python translate_lmstudio.py --hide-chain --chain-tag think \
 
 ## 更新日志
 
+### v1.3.1 (2026-05-21) — Bug 修复与打包优化
+- 修复 `translate_chunk` 的 `skip_on_error` 参数导致 marker 被当译文返回的致命 bug
+- 修复 `run_translation` 依赖全局变量 `OVERWRITE_FLAG`/`RESUME_FLAG` 的线程安全问题
+- 修复 `InProcessRunner.Writer.flush` 在 `redirect_stdout` 退出时丢日志的问题
+- 修复 `translate_with_bisect` 空串输入导致无限递归的问题
+- 修复 `translate_with_bisect` 左右半失败时返回 None 丢弃已有成果的问题
+- 修复 GUI inspect tab 的 `pick_output` 设置错误变量的问题
+- 修复 `ScrollableFrame` 滚轮重复绑定导致滚动异常的问题
+- 统一 `pyproject.toml` 与 `requirements.txt` 依赖，修复 `requires-python` 版本不一致
+- 修复 `document_loader` PDF 回退时丢失原始异常信息的问题
+- 修复 `pdf_recognizer` VLM 失败时静默吞异常的问题
+- 用 uv 环境重新打包，确保 ttkbootstrap/pdfminer 正确包含
+- 更新 .gitignore，排除 .trae/.serena/dist/zip 等工具缓存和二进制产物
+
 ### v1.2.0 (2025-10-22) - 上下文标识清理与目录记忆
-- 清理重叠上下文标识残留（“仅将重叠部分作为上下文，不输出”）
+- 清理重叠上下文标识残留（"仅将重叠部分作为上下文，不输出"）
 - 目录记忆：记录并默认回填最近使用的输入/输出目录
 - 思维链隐藏：支持 `--hide-chain` 与 `--chain-tag`（CLI/GUI）
-- 文档更新：README 区分 1.2.0 与 1.1.1，补充用法说明
 - 最低 Python 版本更新为 3.9+（兼容 BooleanOptionalAction）
 
 ### v1.1.1 (2025-09-21) - 输出后处理与打包清理
 - 界面升级：集成 ttkbootstrap，提供 11 种主题
 - 功能增强：新增系统提示词自定义和 LLM 超参数调节
 - 交互优化：添加悬停效果、焦点反馈和语义化按钮
-- 布局改进：优化控件布局和间距
 - 依赖更新：添加 ttkbootstrap 依赖
 
 ### v1.0.0 (2025-09-17) - 初始版本
@@ -320,22 +333,8 @@ python translate_lmstudio.py --hide-chain --chain-tag think \
 
 <div align="center">
 
-
-
 如果这个项目对您有帮助，请给个 Star
 
-[报告问题](https://github.com/your-username/lm-studio-translator/issues) • [功能建议](https://github.com/your-username/lm-studio-translator/issues) • [贡献代码](https://github.com/your-username/lm-studio-translator/pulls)
+[报告问题](https://github.com/QianYan-Art/translate-workflow/issues) • [功能建议](https://github.com/QianYan-Art/translate-workflow/issues) • [贡献代码](https://github.com/QianYan-Art/translate-workflow/pulls)
 
 </div>
-### 打包版配置文件（gui_prefs.json）
-
-位于 `dist/LM-Translate-GUI/gui_prefs.json`，程序启动时读取。
-
-- `theme`: 启动主题，推荐 `minty`
-- `defaults`: 基本参数（如 base_url、api_key、chunk/overlap 等），为空时使用内置默认
-- `pdf`: 识别配置
-  - `mode`: `auto`（优先用 VLM）/`vlm`/`none`
-  - `vlm_url`: 远程 VLM 服务地址
-  - `vlm_key`: 远程 VLM 服务密钥
-  - `dpi`: PDF 渲染分辨率，默认 200（150–200 平衡、300 更清晰但更慢）
-  - `pages`: 页范围，例如 `1-3,7`
