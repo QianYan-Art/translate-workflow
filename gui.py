@@ -1223,5 +1223,8 @@ class App(tk.Tk):
             pass
 
 if __name__ == "__main__":
+    main()
+
+def main():
     app = App()
     app.mainloop()

@@ -139,14 +139,17 @@ python inspect_chunks.py --input "input.txt" --chunks "1-5"
 
 ### 打包方式
 
-使用 uv 管理依赖，PyInstaller 打包：
-
+确保已安装 PyInstaller：
 ```bash
 uv add --dev pyinstaller
+```
+
+打包命令：
+```bash
 uv run pyinstaller --noconfirm --onedir --windowed --name "LM-Translate-GUI" --add-data "gui_prefs.template.json;." --hidden-import "ttkbootstrap" --collect-all ttkbootstrap --hidden-import "pdfminer" --collect-all pdfminer gui.py
 ```
 
-打包产物位于 `dist/LM-Translate-GUI/`，压缩包位于 `zip/LM-Translate-GUI-v1.3.1.zip`。
+打包产物位于 `dist/LM-Translate-GUI/`，压缩包位于 `zip/` 目录。
 
 ### dist 文件夹说明
 
