@@ -212,6 +212,7 @@ $RECYCLE.BIN/
 # Project specific
 # 用户指定的忽略文件和文件夹
 .venv/
+dist/
 zip/
 translated.txt
 userinput.py
