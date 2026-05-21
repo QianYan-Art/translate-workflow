@@ -1,27 +1,36 @@
 {
   "theme": "minty",
-  "paths": {},
+  "paths": {
+    "input_dir": "C:\\Users\\lenovo\\Desktop\\汇报\\8.4\\dataset\\1",
+    "output_dir": "C:\\Users\\lenovo\\Desktop"
+  },
   "defaults": {
     "base_url": "http://localhost:1235/v1",
     "api_key": "lm-studio",
-    "model": "",
+    "model": "wukomg",
     "input": "whole.txt",
     "output": "translated.txt",
     "source_lang": "auto",
     "target_lang": "zh",
-    "chunk_size": 3000,
-    "overlap_chars": 120,
+    "chunk_size": 256,
+    "overlap_chars": 20,
     "context_only_overlap": true,
     "start_chunk": 1,
-    "request_timeout": 90,
+    "request_timeout": 1800,
     "max_retries": 3,
-    "skip_on_error": true,
-    "use_stream": true,
+    "skip_on_error": false,
+    "use_stream": false,
     "auto_bisect": true,
-    "bisect_min_chars": 600,
+    "bisect_min_chars": 32,
     "bisect_max_depth": 3,
-    "hide_chain": false,
-    "chain_tag": "think"
+    "hide_chain": true,
+    "chain_tag": "think",
+    "system_prompt": "你是一位兼具「推理模型」与「轻小说风格再创作者」双重身份的日译中文学翻译专家。\n工作时必须**先思考、后输出**：把所有推理过程写在 `<think>...</think>` 标签内，再给出最终译文。\n\n【推理模板】请严格按以下 5 步执行，每一步都要用 1.2.3. 标出，并随时用“三维审视”自检：\n\n<think>\n1. 语境速读\n   ‑ 场景是谁？视角人物年龄、性别、情绪？\n   ‑ 原文句式节奏如何？（急促/悠长/俏皮/庄重？）\n\n2. 消除翻译腔\n   ‑ 拆解日语特有的被动、省略、主语后置等结构，改写成地道中文语序。\n   ‑ 把「という」「というか」「…のだ」等虚化表达换成自然中文语气。\n\n3. 三维审视（少女感／画面感／文学性）\n   ‑ 角色维：对话是否贴合 15 岁少女口吻？可加入「呐」「我说啊」「之类的」等俏皮语气词。\n   ‑ 场景维：是否完成“蓄势→发力→余韵”的镜头节奏？有没有留下“视觉锚点”？\n   ‑ 表达维：是否用隐喻、拟声、节奏重复等手法提升文学张力？是否保留悬念？\n\n4. 特殊元素处理\n   ‑ 拟声拟态词：结合第 3 维，转为中文可感知的生理反应或环境描写（ドキドキ→心跳撞得耳朵发疼）。\n   ‑ 文化负载词：优先“自然化”而非注释；若必须注释，用角色口吻顺带一句即可。\n   ‑ 句尾粒子：用中文句调或表情描写替代（「よ」→抬高尾音，或「她竖起食指强调道」）。\n\n5. 定稿自检\n   ‑ 朗读一遍，确认没有生硬词、同字高频重复。\n   ‑ 检查节奏：长句≤25 字、短句≥3 字交替，保证呼吸感。\n</think>\n\n—— 以下为译文 ——",
+    "temperature": "0.7",
+    "top_p": "0.95",
+    "top_k": "40",
+    "repetition_penalty": "1.15",
+    "length_penalty": "1"
   },
   "pdf": {
     "mode": "auto",
@@ -29,5 +38,6 @@
     "vlm_key": "",
     "dpi": 200,
     "pages": ""
-  }
+  },
+  "last_dir": "C:\\Users\\lenovo\\Desktop\\汇报\\8.4\\dataset\\1"
 }

@@ -267,7 +267,7 @@ def try_translate_unit(
     return translate_chunk(
         client, model, messages,
         retries=max_retries, timeout=request_timeout, use_stream=use_stream,
-        skip_on_error=False, chunk_index=chunk_index,
+        chunk_index=chunk_index,
         temperature=temperature, top_p=top_p, top_k=top_k,
         repetition_penalty=repetition_penalty, length_penalty=length_penalty,
     )
@@ -760,9 +760,6 @@ if __name__ == "__main__":
     except Exception as _e:
         print(f"Warning: failed to read system prompt file: {_e}")
         sys_prompt_val = None
-    # Expose flags to run_translation scope via globals
-    OVERWRITE_FLAG = bool(getattr(ns, "overwrite", False))
-    RESUME_FLAG = bool(getattr(ns, "resume", False))
     try:
         run_translation(
             input_path=ns.input,
