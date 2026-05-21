@@ -214,6 +214,8 @@ $RECYCLE.BIN/
 .venv/
 dist/
 zip/
+.trae/
+.serena/
 translated.txt
 userinput.py
 whole.txt
