@@ -20,7 +20,7 @@ def load_document(path: str, pdf_recognition: Optional[dict] = None) -> str:
             from pdfminer.high_level import extract_text
             text = extract_text(path) or ""
             return text.replace("\r\n", "\n").replace("\r", "\n")
-        except Exception:
+        except Exception as e1:
             try:
                 import PyPDF2
                 reader = PyPDF2.PdfReader(path)
@@ -29,7 +29,7 @@ def load_document(path: str, pdf_recognition: Optional[dict] = None) -> str:
                     parts.append(page.extract_text() or "")
                 return "\n\n".join(parts)
             except Exception as e2:
-                raise RuntimeError(f"Failed to load PDF: {e2}")
+                raise RuntimeError(f"Failed to load PDF (pdfminer: {e1}; PyPDF2: {e2})")
     if ext == ".docx":
         try:
             from docx import Document

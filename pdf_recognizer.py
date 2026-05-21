@@ -87,6 +87,6 @@ def recognize_pdf(path: str, cfg: Dict) -> str:
                 return "\n\n".join(out)
             t = data.get("text") or ""
             return t
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: VLM recognition failed: {e}. Falling back to empty text.")
     return "\n\n".join([""] * len(images))

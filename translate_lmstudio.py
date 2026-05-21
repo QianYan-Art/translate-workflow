@@ -5,9 +5,6 @@ import sys
 import time
 from typing import List, Optional, Tuple, Any
 
-# Output behavior flags (can be overridden by CLI)
-OVERWRITE_FLAG = False
-RESUME_FLAG = False
 
 # === User Config (edit here) ===
 CONFIG = {
@@ -161,7 +158,6 @@ def translate_chunk(
     retry_delay: float = 2.0,
     timeout: int | float | None = None,
     use_stream: bool = True,
-    skip_on_error: bool = False,
     chunk_index: int | None = None,
     *,
     temperature: float = 0.0,
@@ -221,11 +217,7 @@ def translate_chunk(
                 print(f"Warning: chunk {chunk_index or ''} attempt {attempt} failed: {e}. Retrying...")
                 time.sleep(retry_delay * attempt)
             else:
-                if skip_on_error:
-                    marker = f"<<<FAILED_CHUNK_{chunk_index or '?'}>>>"
-                    print(f"Error: {marker} - skipping after {retries} attempts.")
-                    return marker
-    raise RuntimeError(f"Translation request failed after {retries} attempts: {last_exc}")
+                raise RuntimeError(f"Translation request failed after {retries} attempts: {last_exc}")
 
 
 # ===== Helpers for auto-bisect and output replacement =====
@@ -303,6 +295,8 @@ def translate_with_bisect(
     repetition_penalty: Optional[float] = 0.0,
     length_penalty: Optional[float] = 0.0,
 ) -> Optional[str]:
+    if not content:
+        return ""
     if depth >= max_depth or len(content) <= min_chars:
         return None
     split_at = find_split_point(content)
@@ -349,7 +343,10 @@ def translate_with_bisect(
         # Join with a newline boundary to avoid accidental concatenation
         joiner = "\n" if (left_out and right_out and not left_out.endswith("\n")) else ""
         return f"{left_out}{joiner}{right_out}"
-    return None
+    # If only one side succeeded, return what we have rather than losing it
+    if left_out is not None:
+        return left_out
+    return right_out
 
 
 def output_contains_failed_marker(output_path: str, idx: int) -> bool:
@@ -502,6 +499,8 @@ def run_translation(
     hide_chain: bool = False,
     chain_tag: str = "think",
     pdf_recognition: Optional[dict] = None,
+    overwrite: bool = False,
+    resume: bool = True,
 ) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -528,9 +527,9 @@ def run_translation(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     if os.path.exists(output_path):
         # Handle existing output based on flags
-        if OVERWRITE_FLAG:
+        if overwrite:
             open(output_path, "w", encoding="utf-8").close()
-        elif RESUME_FLAG:
+        elif resume:
             pass  # append to existing file
         else:
             print(f"Output file already exists: {output_path}")
@@ -799,6 +798,8 @@ if __name__ == "__main__":
                 "dpi": int(getattr(ns, "pdf_dpi", CONFIG.get("PDF_DPI",200))),
                 "pages": getattr(ns, "pdf_pages", CONFIG.get("PDF_PAGES","")) or None,
             },
+            overwrite=bool(getattr(ns, "overwrite", False)),
+            resume=bool(getattr(ns, "resume", False)),
         )
     except KeyboardInterrupt:
         print("Interrupted by user.")

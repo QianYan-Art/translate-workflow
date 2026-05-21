@@ -316,8 +316,8 @@ class InProcessRunner:
             try:
                 with contextlib.redirect_stdout(w), contextlib.redirect_stderr(w):
                     import translate_lmstudio as tlm
-                    tlm.OVERWRITE_FLAG = bool(overwrite)
-                    tlm.RESUME_FLAG = bool(resume)
+                    kwargs["overwrite"] = bool(overwrite)
+                    kwargs["resume"] = bool(resume)
                     tlm.run_translation(**kwargs)
             except BaseException as e:
                 # Ensure error is reported (including SystemExit)
@@ -327,8 +327,8 @@ class InProcessRunner:
                 except Exception:
                     tb = str(e)
                 runner.q.put(f"[ERR] {tb}\n")
-
-        self.thread = threading.Thread(target=target, daemon=True)
+            finally:
+                w.flush()
         self.thread.start()
         self.text.after(80, self._pulser)
         self.status.set("运行中...")
@@ -399,8 +399,6 @@ class ScrollableFrame(ttk.Frame):
                 pass
         self.canvas.bind("<Enter>", _bind_wheel)
         self.canvas.bind("<Leave>", _unbind_wheel)
-        self.inner.bind("<Enter>", _bind_wheel)
-        self.inner.bind("<Leave>", _unbind_wheel)
 
     @property
     def content(self):
@@ -821,7 +819,7 @@ class App(tk.Tk):
         def pick_output():
             p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="选择输出文件", defaultextension=".txt", filetypes=[("Text files", "*.txt")])
             if p:
-                self.var_output.set(p)
+                self.var_ins_export.set(p)
                 self._remember_path(p)
         def pick_export():
             p = filedialog.asksaveasfilename(initialdir=self._get_initial_dir(), title="导出报告为...", defaultextension=".txt")
